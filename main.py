@@ -407,7 +407,12 @@ class YTDownloaderApp:
             self._pill("Error", bg="#fdecea", fg=DL_RED)
 
     def _start_download(self):
-        if not self.info or self.is_downloading:
+        if not self.info:
+            return
+        if self.is_downloading:
+            messagebox.showwarning(
+                "Download In Progress",
+                "A download is already running. Please wait for it to finish.")
             return
         url     = self.url_var.get().strip()
         fmt     = self.format_var.get()

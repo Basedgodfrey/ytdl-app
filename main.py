@@ -33,23 +33,24 @@ def _assets_path(filename):
     return os.path.join(base, "assets", filename)
 
 
-def _load_brand_mark(size: int = 22):
+def _load_brand_mark(size: int = 28):
     """
     Return a CTkImage of the Canopy logo mark at *size* logical points.
-    Renders at 2× (size*2 px) so it looks crisp on Retina.
+    Uses the 128px master PNG as the source so CTkImage can downsample
+    to the exact pixel count needed (56px on Retina @ 28pt), giving
+    sharp edges rather than the blur you get from upscaling a tiny image.
     Returns None gracefully if the asset is missing or Pillow is absent.
     """
     if not PILLOW:
         return None
-    px   = size * 2           # physical pixels (2× for Retina)
-    path = _assets_path("canopy-mark-44.png")
+    path = _assets_path("canopy-mark-128.png")
+    if not os.path.exists(path):
+        path = _assets_path("canopy-mark-44.png")
     if not os.path.exists(path):
         return None
     try:
-        img = Image.open(path).convert("RGBA")
-        if img.size != (px, px):
-            img = img.resize((px, px), Image.LANCZOS)
-        return ctk.CTkImage(light_image=img, size=(size, size))
+        src = Image.open(path).convert("RGBA")   # 128×128 high-res master
+        return ctk.CTkImage(light_image=src, size=(size, size))
     except Exception:
         return None
 
@@ -424,7 +425,7 @@ class CanopyApp:
         brand_frame = ctk.CTkFrame(tbar, fg_color="transparent", corner_radius=0)
         brand_frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        brand_img = _load_brand_mark(20)
+        brand_img = _load_brand_mark(28)
         if brand_img:
             ctk.CTkLabel(brand_frame, image=brand_img, text="",
                          fg_color="transparent").pack(side="left")

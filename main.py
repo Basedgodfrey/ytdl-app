@@ -33,26 +33,35 @@ def _assets_path(filename):
     return os.path.join(base, "assets", filename)
 
 
-def _load_brand_mark(size: int = 28):
-    """
-    Return a CTkImage of the Canopy logo mark at *size* logical points.
-    Uses the 128px master PNG as the source so CTkImage can downsample
-    to the exact pixel count needed (56px on Retina @ 28pt), giving
-    sharp edges rather than the blur you get from upscaling a tiny image.
-    Returns None gracefully if the asset is missing or Pillow is absent.
-    """
+def _load_brand_mark(size: int = 32):
+    """Load canopy-green-512.png and return a CTkImage at *size* logical pt."""
     if not PILLOW:
         return None
-    path = _assets_path("canopy-mark-128.png")
-    if not os.path.exists(path):
-        path = _assets_path("canopy-mark-44.png")
+    path = _assets_path("canopy-green-512.png")
     if not os.path.exists(path):
         return None
     try:
-        src = Image.open(path).convert("RGBA")   # 128×128 high-res master
+        src = Image.open(path).convert("RGBA")
         return ctk.CTkImage(light_image=src, size=(size, size))
     except Exception:
         return None
+
+
+def _set_dock_icon():
+    """Set the macOS dock icon at runtime using the 512px icon PNG."""
+    if not PILLOW:
+        return
+    path = _assets_path("canopy-icon-512.png")
+    if not os.path.exists(path):
+        return
+    try:
+        # Use AppKit (available via pyobjc, installed with pywebview)
+        from AppKit import NSApplication, NSImage
+        ns_img = NSImage.alloc().initWithContentsOfFile_(path)
+        if ns_img:
+            NSApplication.sharedApplication().setApplicationIconImage_(ns_img)
+    except Exception:
+        pass
 
 HISTORY_FILE = os.path.expanduser("~/.ytdl_history.json")
 THUMB_CACHE  = os.path.expanduser("~/.ytdl_cache/thumbnails")
@@ -332,6 +341,7 @@ class CanopyApp:
         os.makedirs(THUMB_CACHE, exist_ok=True)
         os.makedirs(DL_LOGS_DIR, exist_ok=True)
         self._setup_log()
+        _set_dock_icon()
         self._build_ui()
         self._refresh_history()
 
@@ -425,7 +435,7 @@ class CanopyApp:
         brand_frame = ctk.CTkFrame(tbar, fg_color="transparent", corner_radius=0)
         brand_frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        brand_img = _load_brand_mark(28)
+        brand_img = _load_brand_mark(32)
         if brand_img:
             ctk.CTkLabel(brand_frame, image=brand_img, text="",
                          fg_color="transparent").pack(side="left")
@@ -445,6 +455,14 @@ class CanopyApp:
         hist_lnk.place(relx=1.0, rely=0.5, anchor="e", x=-PAD)
         hist_lnk.bind("<Button-1>",
                       lambda e: self.hist_scroll._parent_canvas.yview_moveto(1.0))
+
+        about_lnk = ctk.CTkLabel(tbar, text="About",
+                                   font=("Helvetica", 12),
+                                   text_color=MUTED,
+                                   fg_color="transparent",
+                                   cursor="hand2")
+        about_lnk.place(relx=1.0, rely=0.5, anchor="e", x=-PAD - 68)
+        about_lnk.bind("<Button-1>", lambda e: self._show_about())
 
         ctk.CTkFrame(self.root, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
@@ -1555,6 +1573,58 @@ class CanopyApp:
                 pass
             self._save_history()
             self._refresh_history()
+
+    # ── About panel ───────────────────────────────────────────────────────────
+
+    def _show_about(self):
+        dlg = ctk.CTkToplevel(self.root)
+        dlg.title("")
+        dlg.resizable(False, False)
+        dlg.configure(fg_color=CARD)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        W = 320
+        content = ctk.CTkFrame(dlg, fg_color=CARD, corner_radius=0)
+        content.pack(fill="x", padx=32, pady=(32, 28))
+
+        # Logo mark at 64 pt
+        mark_img = _load_brand_mark(64)
+        if mark_img:
+            self._about_mark_ref = mark_img
+            ctk.CTkLabel(content, image=mark_img, text="",
+                         fg_color="transparent").pack()
+
+        ctk.CTkLabel(content, text="C A N O P Y",
+                     font=("Helvetica Neue", 15),
+                     text_color=FG,
+                     fg_color="transparent").pack(pady=(14, 4))
+
+        ctk.CTkLabel(content, text="YouTube Downloader for creators",
+                     font=("Helvetica", 11),
+                     text_color=MUTED,
+                     fg_color="transparent").pack()
+
+        ctk.CTkFrame(content, fg_color=BORDER, height=1,
+                     corner_radius=0).pack(fill="x", pady=(20, 16))
+
+        ctk.CTkLabel(content, text="Built with yt-dlp · CustomTkinter · pywebview",
+                     font=("Helvetica", 10),
+                     text_color=DIM,
+                     fg_color="transparent").pack()
+
+        ctk.CTkButton(dlg, text="Close",
+                      font=("Helvetica", 12),
+                      fg_color=ACCENT, hover_color="#3d6b4a",
+                      text_color="#ffffff",
+                      corner_radius=10, height=38,
+                      command=dlg.destroy).pack(fill="x", padx=32, pady=(0, 28))
+
+        dlg.update_idletasks()
+        dh = dlg.winfo_reqheight()
+        x  = self.root.winfo_x() + (self.root.winfo_width()  - W) // 2
+        y  = self.root.winfo_y() + (self.root.winfo_height() - dh) // 2
+        dlg.geometry(f"{W}x{dh}+{x}+{y}")
 
     # ── Utilities ─────────────────────────────────────────────────────────────
 

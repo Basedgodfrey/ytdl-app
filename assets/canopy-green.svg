@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" fill="none">
+  
+  <!-- Arc: primary form, wide and commanding -->
+  <path d="M 14 36 A 26 26 0 0 1 66 36"
+    stroke="#4a7c59" stroke-width="2.8" stroke-linecap="round" fill="none"/>
+  <!-- Stem: short, anchors arrow below arc -->
+  <line x1="40" y1="36" x2="40" y2="52"
+    stroke="#4a7c59" stroke-width="2.8" stroke-linecap="round"/>
+  <!-- Chevron: tight, subordinate signal -->
+  <polyline points="33,45 40,52 47,45"
+    stroke="#4a7c59" stroke-width="2.8"
+    stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

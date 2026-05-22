@@ -413,6 +413,7 @@ class YTDownloaderApp:
         fmt     = self.format_var.get()
         quality = self.quality_var.get()
         self.is_downloading = True
+        self._download_completed = False          # guard against duplicate completions
         self.dl_btn.config(state="disabled")
         self.fetch_btn.config(state="disabled")
         self.act_progress_var.set(0)
@@ -439,7 +440,24 @@ class YTDownloaderApp:
                 postprocessors = []
             else:
                 h_map = {"1080p": 1080, "720p": 720, "480p": 480, "360p": 360}
-                if quality in h_map:
+                if fmt == "mp4":
+                    # Prefer H.264 + AAC so the file plays in QuickTime natively.
+                    # Falls back to any mp4-compatible stream if h264 isn't available.
+                    if quality in h_map:
+                        h = h_map[quality]
+                        ydl_fmt = (
+                            f"bestvideo[vcodec^=avc1][height<={h}][ext=mp4]"
+                            f"+bestaudio[ext=m4a]"
+                            f"/bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]"
+                            f"/bestvideo[height<={h}]+bestaudio/best"
+                        )
+                    else:
+                        ydl_fmt = (
+                            "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]"
+                            "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+                            "/bestvideo+bestaudio/best"
+                        )
+                elif quality in h_map:
                     h = h_map[quality]
                     ydl_fmt = (f"bestvideo[height<={h}][ext={fmt}]+bestaudio"
                                f"/bestvideo[height<={h}]+bestaudio/best")
@@ -527,6 +545,9 @@ class YTDownloaderApp:
         self._log_update(label, "active")
 
     def _on_download_done(self):
+        if self._download_completed:
+            return
+        self._download_completed = True
         self.is_downloading = False
         self.act_progress_var.set(100)
         self._write_log(f"Download complete. Folder: {self.download_path}")

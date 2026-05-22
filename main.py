@@ -23,6 +23,36 @@ try:
 except ImportError:
     WEBVIEW = False
 
+
+def _assets_path(filename):
+    """Resolve a file inside the assets/ folder for both dev and PyInstaller bundle."""
+    if getattr(sys, "frozen", False):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, "assets", filename)
+
+
+def _load_brand_mark(size: int = 22):
+    """
+    Return a CTkImage of the Canopy logo mark at *size* logical points.
+    Renders at 2× (size*2 px) so it looks crisp on Retina.
+    Returns None gracefully if the asset is missing or Pillow is absent.
+    """
+    if not PILLOW:
+        return None
+    px   = size * 2           # physical pixels (2× for Retina)
+    path = _assets_path("canopy-mark-44.png")
+    if not os.path.exists(path):
+        return None
+    try:
+        img = Image.open(path).convert("RGBA")
+        if img.size != (px, px):
+            img = img.resize((px, px), Image.LANCZOS)
+        return ctk.CTkImage(light_image=img, size=(size, size))
+    except Exception:
+        return None
+
 HISTORY_FILE = os.path.expanduser("~/.ytdl_history.json")
 THUMB_CACHE  = os.path.expanduser("~/.ytdl_cache/thumbnails")
 LOG_FILE     = os.path.expanduser("~/.ytdl_debug.log")
@@ -390,10 +420,21 @@ class CanopyApp:
             browse_lnk.place(relx=0.0, rely=0.5, anchor="w", x=PAD)
             browse_lnk.bind("<Button-1>", lambda e: self._open_browser())
 
-        ctk.CTkLabel(tbar, text="Canopy",
-                     font=("Helvetica", 13, "bold"),
-                     text_color="#6b6560",
-                     fg_color="transparent").place(relx=0.5, rely=0.5, anchor="center")
+        # ── Centered brand mark + wordmark ──────────────────────────────────
+        brand_frame = ctk.CTkFrame(tbar, fg_color="transparent", corner_radius=0)
+        brand_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        brand_img = _load_brand_mark(20)
+        if brand_img:
+            ctk.CTkLabel(brand_frame, image=brand_img, text="",
+                         fg_color="transparent").pack(side="left")
+            self._brand_img_ref = brand_img   # prevent GC
+
+        ctk.CTkLabel(brand_frame,
+                     text="C A N O P Y",
+                     font=("Helvetica Neue", 12),
+                     text_color="#2a2520",
+                     fg_color="transparent").pack(side="left", padx=(7, 0))
 
         hist_lnk = ctk.CTkLabel(tbar, text="History",
                                   font=("Helvetica", 12, "bold"),

@@ -16,7 +16,9 @@ echo "→ Building Canopy.app..."
 $PYI \
   --windowed \
   --name "Canopy" \
+  --icon "assets/canopy.icns" \
   --add-binary "$FFMPEG:." \
+  --add-data "assets:assets" \
   --hidden-import yt_dlp \
   --hidden-import PIL \
   --hidden-import PIL.Image \

@@ -3,6 +3,7 @@ from tkinter import ttk, filedialog, messagebox
 import threading
 import yt_dlp
 import os
+import sys
 import json
 import urllib.request
 import datetime
@@ -15,6 +16,44 @@ except ImportError:
 
 HISTORY_FILE = os.path.expanduser("~/.ytdl_history.json")
 THUMB_CACHE  = os.path.expanduser("~/.ytdl_cache/thumbnails")
+LOG_FILE     = os.path.expanduser("~/.ytdl_debug.log")
+
+
+def _find_ffmpeg():
+    """Return ffmpeg path: bundled app → Homebrew → PATH → None."""
+    # PyInstaller bundle unpacks binaries to sys._MEIPASS
+    if getattr(sys, "frozen", False):
+        bundled = os.path.join(sys._MEIPASS, "ffmpeg")
+        if os.path.isfile(bundled):
+            return bundled
+    homebrew = "/opt/homebrew/bin/ffmpeg"
+    if os.path.isfile(homebrew):
+        return homebrew
+    import shutil
+    return shutil.which("ffmpeg")
+
+
+FFMPEG_PATH = _find_ffmpeg()
+
+
+class YtdlLogger:
+    """Routes yt-dlp log messages to the session log file."""
+    def __init__(self, write_fn):
+        self._write = write_fn
+
+    def debug(self, msg):
+        if msg.startswith("[debug]"):
+            return          # skip verbose debug noise
+        self._write(f"[yt-dlp] {msg}")
+
+    def info(self, msg):
+        self._write(f"[yt-dlp] {msg}")
+
+    def warning(self, msg):
+        self._write(f"[yt-dlp WARN] {msg}")
+
+    def error(self, msg):
+        self._write(f"[yt-dlp ERROR] {msg}")
 
 # ── Apple-inspired palette ─────────────────────────────────────────────────
 BG      = "#f2f2f7"   # systemGroupedBackground
@@ -53,8 +92,24 @@ class YTDownloaderApp:
 
         self.history = self._load_history()
         os.makedirs(THUMB_CACHE, exist_ok=True)
+        self._setup_log()
         self._build_ui()
         self._refresh_history()
+
+    # ── Session log ────────────────────────────────────────────────────────
+
+    def _setup_log(self):
+        self._log_file = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
+        self._write_log("=" * 60)
+        self._write_log(f"Session started  ffmpeg={FFMPEG_PATH or 'NOT FOUND'}")
+        self._write_log(f"Python={sys.executable}")
+
+    def _write_log(self, msg):
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        try:
+            self._log_file.write(f"[{ts}] {msg}\n")
+        except Exception:
+            pass
 
     # ── Persistence ────────────────────────────────────────────────────────
 
@@ -320,6 +375,7 @@ class YTDownloaderApp:
         threading.Thread(target=self._do_fetch, args=(url,), daemon=True).start()
 
     def _do_fetch(self, url):
+        self._write_log(f"Fetching info for: {url}")
         try:
             with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True,
                                     "skip_download": True}) as ydl:
@@ -327,10 +383,12 @@ class YTDownloaderApp:
             title    = self.info.get("title", "Unknown")
             uploader = self.info.get("uploader", "")
             duration = self.info.get("duration_string", "")
-            parts    = [p for p in (title, uploader, duration) if p]
-            display  = "  ·  ".join(parts)
+            self._write_log(f"Info OK  title={title!r}  uploader={uploader!r}  duration={duration!r}")
+            parts   = [p for p in (title, uploader, duration) if p]
+            display = "  ·  ".join(parts)
             self.root.after(0, lambda: self._on_fetch_done(display, title, True))
         except Exception as e:
+            self._write_log(f"Fetch error: {e}")
             self.root.after(0, lambda: self._on_fetch_done(str(e), "", False))
 
     def _on_fetch_done(self, display, title, success):
@@ -363,6 +421,11 @@ class YTDownloaderApp:
                          args=(url, fmt, quality), daemon=True).start()
 
     def _do_download(self, url, fmt, quality):
+        self._write_log(f"Download start  url={url}  fmt={fmt}  quality={quality}")
+        self._write_log(f"Save path: {self.download_path}")
+        self._write_log(f"ffmpeg: {FFMPEG_PATH or 'NOT FOUND — merging will fail'}")
+        self._last_filename = None
+
         try:
             if fmt == "mp3":
                 ydl_fmt = "bestaudio/best"
@@ -382,19 +445,34 @@ class YTDownloaderApp:
                     ydl_fmt = f"bestvideo[ext={fmt}]+bestaudio/bestvideo+bestaudio/best"
                 postprocessors = []
 
+            outtmpl = os.path.join(self.download_path, "%(title)s.%(ext)s")
+            self._write_log(f"Format string: {ydl_fmt}")
+            self._write_log(f"outtmpl: {outtmpl}")
+
             ydl_opts = {
                 "format": ydl_fmt,
-                "outtmpl": os.path.join(self.download_path, "%(title)s.%(ext)s"),
+                "outtmpl": outtmpl,
                 "merge_output_format": fmt if fmt not in ("mp3", "m4a") else None,
                 "progress_hooks": [self._progress_hook],
-                "quiet": True,
-                "no_warnings": True,
+                "logger": YtdlLogger(self._write_log),
+                "quiet": False,
+                "no_warnings": False,
             }
+            if FFMPEG_PATH:
+                ydl_opts["ffmpeg_location"] = os.path.dirname(FFMPEG_PATH)
             if postprocessors:
                 ydl_opts["postprocessors"] = postprocessors
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
+
+            if self._last_filename:
+                exists = os.path.isfile(self._last_filename)
+                self._write_log(f"File written: {self._last_filename}  exists={exists}")
+                if not exists:
+                    self._write_log("WARNING: file not found at expected path!")
+            else:
+                self._write_log("WARNING: no filename captured from progress hook")
 
             entry = {
                 "title":         self.info.get("title", "Unknown"),
@@ -420,6 +498,7 @@ class YTDownloaderApp:
 
             self.root.after(0, self._on_download_done)
         except Exception as e:
+            self._write_log(f"Download exception: {e}")
             self.root.after(0, lambda: self._on_download_error(str(e)))
 
     def _progress_hook(self, d):
@@ -435,6 +514,10 @@ class YTDownloaderApp:
             label = "Downloading  " + "  ·  ".join(parts)
             self.root.after(0, lambda p=pct, s=label: self._set_progress(p, s))
         elif d["status"] == "finished":
+            fname = d.get("filename", "")
+            if fname:
+                self._last_filename = fname
+                self._write_log(f"Fragment finished: {fname}")
             self.root.after(0, lambda: self._set_progress(95, "Processing..."))
 
     def _set_progress(self, pct, label):
@@ -444,6 +527,7 @@ class YTDownloaderApp:
     def _on_download_done(self):
         self.is_downloading = False
         self.act_progress_var.set(100)
+        self._write_log(f"Download complete. Folder: {self.download_path}")
         self._log_update("Download complete!", "success")
         self._log(f"Saved to {self._short_path(self.download_path)}", "muted")
         self._pill("Done", bg="#e6f9ee", fg=GREEN)

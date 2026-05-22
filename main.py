@@ -7,6 +7,7 @@ import sys
 import json
 import urllib.request
 import datetime
+import webbrowser
 
 try:
     from PIL import Image, ImageTk
@@ -17,6 +18,7 @@ except ImportError:
 HISTORY_FILE = os.path.expanduser("~/.ytdl_history.json")
 THUMB_CACHE  = os.path.expanduser("~/.ytdl_cache/thumbnails")
 LOG_FILE     = os.path.expanduser("~/.ytdl_debug.log")
+DL_LOGS_DIR  = os.path.expanduser("~/.ytdl_cache/logs")
 
 
 def _find_ffmpeg():
@@ -91,14 +93,17 @@ class YTDownloaderApp:
         self.is_downloading = False
         self.activity_open  = True
         self._thumb_refs    = {}
+        self._dl_log_handle = None   # per-download log file handle
+        self._dl_log_path   = None   # per-download log file path
 
         self.history = self._load_history()
         os.makedirs(THUMB_CACHE, exist_ok=True)
+        os.makedirs(DL_LOGS_DIR, exist_ok=True)
         self._setup_log()
         self._build_ui()
         self._refresh_history()
 
-    # ── Session log ────────────────────────────────────────────────────────
+    # ── Logging ────────────────────────────────────────────────────────────
 
     def _setup_log(self):
         self._log_file = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
@@ -107,11 +112,53 @@ class YTDownloaderApp:
         self._write_log(f"Python={sys.executable}")
 
     def _write_log(self, msg):
+        """Write to the persistent session log and the active per-download log."""
         ts = datetime.datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}\n"
         try:
-            self._log_file.write(f"[{ts}] {msg}\n")
+            self._log_file.write(line)
         except Exception:
             pass
+        if self._dl_log_handle:
+            try:
+                self._dl_log_handle.write(line)
+            except Exception:
+                pass
+
+    def _open_dl_log(self, video_id, title):
+        """Create a fresh per-download .txt log file, return its path."""
+        self._close_dl_log()
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe = "".join(c for c in title[:40] if c.isalnum() or c in " -_").strip()
+        fname = f"{ts}_{video_id}.txt"
+        path = os.path.join(DL_LOGS_DIR, fname)
+        try:
+            self._dl_log_handle = open(path, "w", buffering=1, encoding="utf-8")
+            self._dl_log_path   = path
+            # Write header
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._dl_log_handle.write(
+                f"YT Downloader — Process Log\n"
+                f"{'=' * 50}\n"
+                f"Date:    {now}\n"
+                f"Video:   {title}\n"
+                f"ID:      {video_id}\n"
+                f"ffmpeg:  {FFMPEG_PATH or 'NOT FOUND'}\n"
+                f"{'=' * 50}\n\n"
+            )
+        except Exception:
+            self._dl_log_handle = None
+            self._dl_log_path   = None
+        return self._dl_log_path
+
+    def _close_dl_log(self):
+        if self._dl_log_handle:
+            try:
+                self._dl_log_handle.write("\n[END OF LOG]\n")
+                self._dl_log_handle.close()
+            except Exception:
+                pass
+            self._dl_log_handle = None
 
     # ── Persistence ────────────────────────────────────────────────────────
 
@@ -418,7 +465,10 @@ class YTDownloaderApp:
         fmt     = self.format_var.get()
         quality = self.quality_var.get()
         self.is_downloading = True
-        self._download_completed = False          # guard against duplicate completions
+        self._download_completed = False
+        title    = self.info.get("title", "Unknown")
+        video_id = self.info.get("id", "unknown")
+        self._open_dl_log(video_id, title)
         self.dl_btn.config(state="disabled")
         self.fetch_btn.config(state="disabled")
         self.act_progress_var.set(0)
@@ -509,6 +559,8 @@ class YTDownloaderApp:
                 "format":        fmt,
                 "quality":       quality,
                 "save_path":     self.download_path,
+                "file_path":     self._last_filename or "",
+                "log_path":      self._dl_log_path or "",
                 "downloaded_at": datetime.datetime.now().isoformat(timespec="seconds"),
             }
             self.history.insert(0, entry)
@@ -556,6 +608,7 @@ class YTDownloaderApp:
         self.is_downloading = False
         self.act_progress_var.set(100)
         self._write_log(f"Download complete. Folder: {self.download_path}")
+        self._close_dl_log()
         self._log_update("Download complete!", "success")
         self._log(f"Saved to {self._short_path(self.download_path)}", "muted")
         self._pill("Done", bg="#e6f9ee", fg=GREEN)
@@ -565,6 +618,8 @@ class YTDownloaderApp:
 
     def _on_download_error(self, error):
         self.is_downloading = False
+        self._write_log(f"Download failed: {error}")
+        self._close_dl_log()
         self._log_update(f"Failed: {error[:80]}", "error")
         self._pill("Error", bg="#fdecea", fg=DL_RED)
         self.dl_btn.config(state="normal")
@@ -666,14 +721,85 @@ class YTDownloaderApp:
                  font=FONT_XS, bg=CARD, fg=MUTED, anchor="w").pack(
                      fill="x", pady=(3, 0))
 
-        # Show in Finder
+        # ··· context menu button
+        menu_btn = tk.Button(inner, text="···",
+                             font=("Helvetica", 15, "bold"),
+                             bg=CARD, fg=MUTED, relief="flat", bd=0,
+                             cursor="hand2",
+                             activebackground=CARD, activeforeground=FG)
+        menu_btn.pack(side="right", padx=(8, 0))
+        menu_btn.config(command=lambda e=entry, b=menu_btn: self._show_row_menu(b, e))
+
+    # ── Row context menu ───────────────────────────────────────────────────
+
+    def _show_row_menu(self, btn, entry):
+        menu = tk.Menu(self.root, tearoff=0,
+                       font=FONT_SM,
+                       bg=CARD, fg=FG,
+                       activebackground=ACCENT, activeforeground="#fff",
+                       relief="flat", bd=0)
+
         save_path = entry.get("save_path", "")
+        log_path  = entry.get("log_path", "")
+        file_path = entry.get("file_path", "")
+        url       = entry.get("url", "")
+
+        # View Folder
         if save_path and os.path.isdir(save_path):
-            tk.Button(inner, text="Show in Finder", font=FONT_XS,
-                      bg=BG, fg=ACCENT, relief="flat", bd=0, cursor="hand2",
-                      activebackground=BG, activeforeground="#0051d5",
-                      command=lambda p=save_path: os.system(f'open "{p}"')
-                      ).pack(side="right", padx=(8, 0))
+            menu.add_command(label="View Folder",
+                             command=lambda: os.system(f'open "{save_path}"'))
+        else:
+            menu.add_command(label="View Folder", state="disabled")
+
+        # View Process Log
+        if log_path and os.path.isfile(log_path):
+            menu.add_command(label="View Process Log",
+                             command=lambda: os.system(f'open -e "{log_path}"'))
+        else:
+            menu.add_command(label="View Process Log", state="disabled")
+
+        menu.add_separator()
+
+        # Delete File
+        if file_path and os.path.isfile(file_path):
+            menu.add_command(label="Delete File",
+                             command=lambda: self._delete_file(entry))
+        else:
+            menu.add_command(label="Delete File", state="disabled")
+
+        # Open on YouTube
+        if url:
+            menu.add_command(label="Open on YouTube",
+                             command=lambda: webbrowser.open(url))
+        else:
+            menu.add_command(label="Open on YouTube", state="disabled")
+
+        # Post at button position
+        x = btn.winfo_rootx()
+        y = btn.winfo_rooty() + btn.winfo_height()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _delete_file(self, entry):
+        file_path = entry.get("file_path", "")
+        title     = entry.get("title", "this file")
+        if not file_path or not os.path.isfile(file_path):
+            messagebox.showwarning("File Not Found",
+                                   "The downloaded file could not be found.")
+            return
+        confirm = messagebox.askyesno(
+            "Delete File",
+            f'Permanently delete "{os.path.basename(file_path)}"?\n\nThis cannot be undone.')
+        if confirm:
+            try:
+                os.remove(file_path)
+                entry["file_path"] = ""  # mark as deleted in memory
+                self._save_history()
+                self._refresh_history()
+            except Exception as e:
+                messagebox.showerror("Delete Failed", str(e))
 
     # ── Utilities ──────────────────────────────────────────────────────────
 

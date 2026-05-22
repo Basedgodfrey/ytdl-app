@@ -461,19 +461,159 @@ class YTDownloaderApp:
                 "Download In Progress",
                 "A download is already running. Please wait for it to finish.")
             return
-        url     = self.url_var.get().strip()
-        fmt     = self.format_var.get()
-        quality = self.quality_var.get()
-        self.is_downloading = True
-        self._download_completed = False
+        self._show_download_picker()
+
+    # ── Download picker dialog ─────────────────────────────────────────────
+
+    def _show_download_picker(self):
+        title     = self.info.get("title", "Unknown")
+        uploader  = self.info.get("uploader", "")
+        duration  = self.info.get("duration_string", "")
+        thumb_url = self.info.get("thumbnail", "")
+        video_id  = self.info.get("id", "")
+
+        DIALOG_W = 400
+        THUMB_H  = 225   # 16:9
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("")
+        dlg.resizable(False, False)
+        dlg.configure(bg=CARD)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        # ── Thumbnail ──────────────────────────────────────────────────────
+        thumb_bg = tk.Frame(dlg, bg="#1c1c1e", width=DIALOG_W, height=THUMB_H)
+        thumb_bg.pack(fill="x")
+        thumb_bg.pack_propagate(False)
+        thumb_lbl = tk.Label(thumb_bg, bg="#1c1c1e", text="▶",
+                             font=("Helvetica", 40), fg="#3a3a3c")
+        thumb_lbl.pack(expand=True)
+        dlg._photo = None  # prevent GC
+
+        def _load_thumb():
+            cached = os.path.join(THUMB_CACHE, f"{video_id}.jpg") if video_id else ""
+            if cached and not os.path.exists(cached) and thumb_url:
+                try:
+                    req = urllib.request.Request(
+                        thumb_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        with open(cached, "wb") as f:
+                            f.write(r.read())
+                except Exception:
+                    return
+            if cached and os.path.exists(cached) and PILLOW:
+                try:
+                    img   = Image.open(cached).convert("RGB")
+                    img   = img.resize((DIALOG_W, THUMB_H), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    def _apply():
+                        if dlg.winfo_exists():
+                            thumb_lbl.config(image=photo, text="")
+                            dlg._photo = photo
+                    dlg.after(0, _apply)
+                except Exception:
+                    pass
+
+        if thumb_url:
+            threading.Thread(target=_load_thumb, daemon=True).start()
+
+        # ── Video info ─────────────────────────────────────────────────────
+        info_f = tk.Frame(dlg, bg=CARD)
+        info_f.pack(fill="x", padx=20, pady=(16, 12))
+
+        tk.Label(info_f, text=title, font=("Helvetica", 13, "bold"),
+                 bg=CARD, fg=FG, anchor="w",
+                 wraplength=360, justify="left").pack(fill="x")
+
+        detail = "  ·  ".join(p for p in (uploader, duration) if p)
+        if detail:
+            tk.Label(info_f, text=detail, font=FONT_XS,
+                     bg=CARD, fg=MUTED, anchor="w").pack(fill="x", pady=(5, 0))
+
+        tk.Frame(dlg, bg=SEP, height=1).pack(fill="x")
+
+        # ── Quality rows ───────────────────────────────────────────────────
+        options = [
+            ("1080p HD",    "mp4", "1080p", "▶", "Best quality  ·  H.264  ·  MP4"),
+            ("720p",        "mp4", "720p",  "▶", "High definition  ·  H.264  ·  MP4"),
+            ("480p",        "mp4", "480p",  "▶", "Standard  ·  H.264  ·  MP4"),
+            ("Audio — MP3", "mp3", "Best",  "♪", "Audio only  ·  192 kbps  ·  MP3"),
+        ]
+
+        for opt_label, fmt, quality, icon, sub in options:
+            def _pick(f=fmt, q=quality):
+                dlg.destroy()
+                self._begin_download(f, q)
+
+            row = tk.Frame(dlg, bg=CARD, cursor="hand2")
+            row.pack(fill="x")
+
+            pad = tk.Frame(row, bg=CARD)
+            pad.pack(fill="x", padx=20, pady=13)
+
+            tk.Label(pad, text=icon, font=("Helvetica", 16),
+                     bg=CARD, fg=ACCENT, width=2).pack(side="left")
+
+            col = tk.Frame(pad, bg=CARD)
+            col.pack(side="left", padx=(12, 0), fill="x", expand=True)
+            tk.Label(col, text=opt_label, font=("Helvetica", 13, "bold"),
+                     bg=CARD, fg=FG, anchor="w").pack(anchor="w")
+            tk.Label(col, text=sub, font=FONT_XS,
+                     bg=CARD, fg=MUTED, anchor="w").pack(anchor="w", pady=(2, 0))
+
+            tk.Label(pad, text="›", font=("Helvetica", 20),
+                     bg=CARD, fg="#c7c7cc").pack(side="right")
+
+            tk.Frame(dlg, bg=SEP, height=1).pack(fill="x")
+
+            self._bind_picker_row(row, _pick)
+
+        # ── Cancel ─────────────────────────────────────────────────────────
+        tk.Button(dlg, text="Cancel", font=("Helvetica", 12),
+                  bg=CARD, fg=MUTED, relief="flat", bd=0,
+                  cursor="hand2", pady=13,
+                  activebackground=CARD, activeforeground=FG,
+                  command=dlg.destroy).pack(fill="x")
+
+        # ── Center over parent ──────────────────────────────────────────────
+        dlg.update_idletasks()
+        dh = dlg.winfo_reqheight()
+        x  = self.root.winfo_x() + (self.root.winfo_width()  - DIALOG_W) // 2
+        y  = self.root.winfo_y() + (self.root.winfo_height() - dh)        // 2
+        dlg.geometry(f"{DIALOG_W}x{dh}+{x}+{y}")
+
+    def _bind_picker_row(self, widget, cmd):
+        """Recursively bind click and hover highlight to a picker row."""
+        widget.bind("<Button-1>", lambda e: cmd())
+        widget.bind("<Enter>",    lambda e: self._row_bg(widget, BG))
+        widget.bind("<Leave>",    lambda e: self._row_bg(widget, CARD))
+        for child in widget.winfo_children():
+            self._bind_picker_row(child, cmd)
+
+    def _row_bg(self, widget, color):
+        try:
+            widget.config(bg=color)
+        except Exception:
+            pass
+        for child in widget.winfo_children():
+            self._row_bg(child, color)
+
+    def _begin_download(self, fmt, quality):
+        """Kick off a download with the chosen format/quality."""
+        if not self.info or self.is_downloading:
+            return
+        url      = self.url_var.get().strip()
         title    = self.info.get("title", "Unknown")
         video_id = self.info.get("id", "unknown")
+        self.is_downloading      = True
+        self._download_completed = False
         self._open_dl_log(video_id, title)
         self.dl_btn.config(state="disabled")
         self.fetch_btn.config(state="disabled")
         self.act_progress_var.set(0)
         self.act_bar.pack(fill="x", padx=16, pady=(0, 10))
-        self._log(f"Starting {fmt.upper()} download...", "active")
+        self._log(f"Starting {fmt.upper()} {quality} download...", "active")
         self._pill("Downloading", bg="#e5f0ff", fg=ACCENT)
         threading.Thread(target=self._do_download,
                          args=(url, fmt, quality), daemon=True).start()

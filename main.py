@@ -717,9 +717,16 @@ class YTDownloaderApp:
         if entry.get("downloaded_at"):
             detail_parts.append(entry["downloaded_at"][:10])
 
-        tk.Label(text_f, text="  ·  ".join(detail_parts),
-                 font=FONT_XS, bg=CARD, fg=MUTED, anchor="w").pack(
-                     fill="x", pady=(3, 0))
+        # File presence check
+        file_path  = entry.get("file_path", "")
+        file_exists = bool(file_path and os.path.isfile(file_path))
+        if file_path and not file_exists:
+            detail_parts.append("⚠ file removed")
+
+        detail_lbl = tk.Label(text_f, text="  ·  ".join(detail_parts),
+                              font=FONT_XS, bg=CARD, anchor="w",
+                              fg="#ff3b30" if (file_path and not file_exists) else MUTED)
+        detail_lbl.pack(fill="x", pady=(3, 0))
 
         # ··· context menu button
         menu_btn = tk.Button(inner, text="···",
@@ -739,19 +746,19 @@ class YTDownloaderApp:
                        activebackground=ACCENT, activeforeground="#fff",
                        relief="flat", bd=0)
 
-        save_path = entry.get("save_path", "")
-        log_path  = entry.get("log_path", "")
-        file_path = entry.get("file_path", "")
-        url       = entry.get("url", "")
+        save_path   = entry.get("save_path", "")
+        log_path    = entry.get("log_path", "")
+        file_path   = entry.get("file_path", "")
+        url         = entry.get("url", "")
+        file_exists = bool(file_path and os.path.isfile(file_path))
 
-        # View Folder
+        # ── View ───────────────────────────────────────────────────────────
         if save_path and os.path.isdir(save_path):
             menu.add_command(label="View Folder",
                              command=lambda: os.system(f'open "{save_path}"'))
         else:
             menu.add_command(label="View Folder", state="disabled")
 
-        # View Process Log
         if log_path and os.path.isfile(log_path):
             menu.add_command(label="View Process Log",
                              command=lambda: os.system(f'open -e "{log_path}"'))
@@ -760,21 +767,31 @@ class YTDownloaderApp:
 
         menu.add_separator()
 
-        # Delete File
-        if file_path and os.path.isfile(file_path):
+        # ── Delete ─────────────────────────────────────────────────────────
+        if file_exists:
             menu.add_command(label="Delete File",
                              command=lambda: self._delete_file(entry))
         else:
             menu.add_command(label="Delete File", state="disabled")
 
-        # Open on YouTube
+        menu.add_command(label="Delete from History",
+                         command=lambda: self._delete_from_history(entry))
+
+        if file_exists:
+            menu.add_command(label="Delete Both",
+                             command=lambda: self._delete_both(entry))
+        else:
+            menu.add_command(label="Delete Both", state="disabled")
+
+        menu.add_separator()
+
+        # ── Open ───────────────────────────────────────────────────────────
         if url:
             menu.add_command(label="Open on YouTube",
                              command=lambda: webbrowser.open(url))
         else:
             menu.add_command(label="Open on YouTube", state="disabled")
 
-        # Post at button position
         x = btn.winfo_rootx()
         y = btn.winfo_rooty() + btn.winfo_height()
         try:
@@ -784,22 +801,55 @@ class YTDownloaderApp:
 
     def _delete_file(self, entry):
         file_path = entry.get("file_path", "")
-        title     = entry.get("title", "this file")
         if not file_path or not os.path.isfile(file_path):
             messagebox.showwarning("File Not Found",
-                                   "The downloaded file could not be found.")
+                                   "The file could not be found on disk.")
             return
-        confirm = messagebox.askyesno(
-            "Delete File",
-            f'Permanently delete "{os.path.basename(file_path)}"?\n\nThis cannot be undone.')
-        if confirm:
+        if messagebox.askyesno("Delete File",
+                               f'Permanently delete:\n"{os.path.basename(file_path)}"'
+                               f'\n\nThis cannot be undone.'):
             try:
                 os.remove(file_path)
-                entry["file_path"] = ""  # mark as deleted in memory
+                entry["file_path"] = ""
                 self._save_history()
                 self._refresh_history()
             except Exception as e:
                 messagebox.showerror("Delete Failed", str(e))
+
+    def _delete_from_history(self, entry):
+        title = entry.get("title", "this item")
+        if messagebox.askyesno("Delete from History",
+                               f'Remove "{title[:60]}" from history?\n\n'
+                               f'The downloaded file will not be deleted.'):
+            try:
+                self.history.remove(entry)
+            except ValueError:
+                pass
+            self._save_history()
+            self._refresh_history()
+
+    def _delete_both(self, entry):
+        file_path = entry.get("file_path", "")
+        title     = entry.get("title", "this item")
+        if not file_path or not os.path.isfile(file_path):
+            messagebox.showwarning("File Not Found",
+                                   "The file could not be found on disk.")
+            return
+        if messagebox.askyesno("Delete Both",
+                               f'Permanently delete the file and remove from history?\n\n'
+                               f'"{os.path.basename(file_path)}"\n\n'
+                               f'This cannot be undone.'):
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                messagebox.showerror("Delete Failed", str(e))
+                return
+            try:
+                self.history.remove(entry)
+            except ValueError:
+                pass
+            self._save_history()
+            self._refresh_history()
 
     # ── Utilities ──────────────────────────────────────────────────────────
 

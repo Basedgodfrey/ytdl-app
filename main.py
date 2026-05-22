@@ -56,21 +56,23 @@ class YtdlLogger:
         self._write(f"[yt-dlp ERROR] {msg}")
 
 # ── Apple-inspired palette ─────────────────────────────────────────────────
-BG      = "#f2f2f7"   # systemGroupedBackground
+BG      = "#f5f4f7"
 CARD    = "#ffffff"
 SEP     = "#e5e5ea"
-ACCENT  = "#007aff"   # systemBlue
-DL_RED  = "#ff3b30"   # systemRed
+ACCENT  = "#007aff"
+DL_RED  = "#ff3b30"
 FG      = "#1d1d1f"
 MUTED   = "#6c6c70"
 GREEN   = "#34c759"
 YELLOW  = "#ff9500"
 
-FONT_H  = ("Helvetica Neue", 22, "bold")
-FONT    = ("Helvetica Neue", 13)
-FONT_SM = ("Helvetica Neue", 11)
-FONT_XS = ("Helvetica Neue", 10)
-FONT_MONO = ("Menlo", 10)
+FONT_H   = ("Helvetica", 24, "bold")      # title
+FONT_SUB = ("Helvetica", 12)              # subtitle / labels
+FONT     = ("Helvetica", 13)              # body
+FONT_MED = ("Helvetica", 13, "bold")      # medium emphasis
+FONT_SM  = ("Helvetica", 11)              # small
+FONT_XS  = ("Helvetica", 10)             # caption
+FONT_MONO = ("Menlo", 10)                # icons / log
 
 THUMB_W, THUMB_H = 96, 54
 
@@ -163,7 +165,7 @@ class YTDownloaderApp:
         self.url_entry.pack(side="left", fill="x", expand=True, ipady=8, ipadx=8)
         self.url_entry.bind("<Return>", lambda e: self._fetch_info())
 
-        self.fetch_btn = tk.Button(url_row, text="Fetch", font=FONT_SM,
+        self.fetch_btn = tk.Button(url_row, text="Fetch", font=("Helvetica", 12, "bold"),
                                    bg=ACCENT, fg="#fff", relief="flat", bd=0,
                                    activebackground="#0051d5",
                                    activeforeground="#fff",
@@ -176,7 +178,7 @@ class YTDownloaderApp:
         info_inner = tk.Frame(url_card, bg=CARD)
         info_inner.pack(fill="x", padx=16, pady=10)
         self.title_label = tk.Label(info_inner, text="Paste a YouTube URL above",
-                                    font=FONT_SM, bg=CARD, fg=MUTED,
+                                    font=("Helvetica", 12), bg=CARD, fg=MUTED,
                                     anchor="w", wraplength=630, justify="left")
         self.title_label.pack(fill="x")
 
@@ -211,7 +213,7 @@ class YTDownloaderApp:
         self.folder_label.bind("<Button-1>", lambda e: self._pick_folder())
 
         self.dl_btn = tk.Button(opts, text="Download",
-                                font=("Helvetica Neue", 13, "bold"),
+                                font=("Helvetica", 14, "bold"),
                                 bg=DL_RED, fg="#fff", relief="flat", bd=0,
                                 activebackground="#c0392b",
                                 activeforeground="#fff",
@@ -247,7 +249,7 @@ class YTDownloaderApp:
         hdr_inner.pack(fill="x", padx=16, pady=10)
 
         self.act_toggle = tk.Label(hdr_inner, text="▾  Activity",
-                                   font=("Helvetica Neue", 11, "bold"),
+                                   font=("Helvetica", 12, "bold"),
                                    bg=CARD, fg=FG, cursor="hand2")
         self.act_toggle.pack(side="left")
         self.act_toggle.bind("<Button-1>", lambda e: self._toggle_activity())
@@ -280,7 +282,7 @@ class YTDownloaderApp:
         hist_hdr = tk.Frame(self.root, bg=BG)
         hist_hdr.pack(fill="x", padx=PAD, pady=(20, 6))
         tk.Label(hist_hdr, text="Recent Downloads",
-                 font=("Helvetica Neue", 13, "bold"),
+                 font=("Helvetica", 14, "bold"),
                  bg=BG, fg=FG).pack(side="left")
         self.hist_count = tk.Label(hist_hdr, text="", font=FONT_XS, bg=BG, fg=MUTED)
         self.hist_count.pack(side="left", padx=(8, 0))
@@ -610,7 +612,7 @@ class YTDownloaderApp:
             tk.Label(thumb_box, image=photo, bg="#e5e5ea").pack(
                 fill="both", expand=True)
         else:
-            tk.Label(thumb_box, text="▶", font=("Helvetica Neue", 20),
+            tk.Label(thumb_box, text="▶", font=("Helvetica", 20),
                      bg="#e5e5ea", fg="#c7c7cc").pack(expand=True)
 
         # Text block
@@ -618,7 +620,7 @@ class YTDownloaderApp:
         text_f.pack(side="left", fill="x", expand=True, padx=(12, 0))
 
         title = entry.get("title", "Unknown")
-        tk.Label(text_f, text=title[:64], font=("Helvetica Neue", 12, "bold"),
+        tk.Label(text_f, text=title[:64], font=("Helvetica", 13, "bold"),
                  bg=CARD, fg=FG, anchor="w").pack(fill="x")
 
         detail_parts = []

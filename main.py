@@ -669,6 +669,7 @@ class YTDownloaderApp:
                 "outtmpl": outtmpl,
                 "merge_output_format": fmt if fmt not in ("mp3", "m4a") else None,
                 "progress_hooks": [self._progress_hook],
+                "postprocessor_hooks": [self._postprocessor_hook],
                 "logger": YtdlLogger(self._write_log),
                 "quiet": False,
                 "no_warnings": False,
@@ -681,13 +682,22 @@ class YTDownloaderApp:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
 
+            # Postprocessor hook may have updated _last_filename to the final
+            # output (e.g. .mp3 after ffmpeg converts from .webm).  If not,
+            # try swapping the extension to the requested format as a fallback.
+            if self._last_filename and not os.path.isfile(self._last_filename):
+                swapped = os.path.splitext(self._last_filename)[0] + f".{fmt}"
+                if os.path.isfile(swapped):
+                    self._write_log(f"Resolved via extension swap: {swapped}")
+                    self._last_filename = swapped
+
             if self._last_filename:
                 exists = os.path.isfile(self._last_filename)
-                self._write_log(f"File written: {self._last_filename}  exists={exists}")
+                self._write_log(f"Final file: {self._last_filename}  exists={exists}")
                 if not exists:
-                    self._write_log("WARNING: file not found at expected path!")
+                    self._write_log("WARNING: file not found at resolved path!")
             else:
-                self._write_log("WARNING: no filename captured from progress hook")
+                self._write_log("WARNING: no filename captured")
 
             entry = {
                 "title":         self.info.get("title", "Unknown"),
@@ -736,6 +746,17 @@ class YTDownloaderApp:
                 self._last_filename = fname
                 self._write_log(f"Fragment finished: {fname}")
             self.root.after(0, lambda: self._set_progress(95, "Processing..."))
+
+    def _postprocessor_hook(self, d):
+        """Called by yt-dlp after each postprocessor (e.g. FFmpegExtractAudio).
+        Captures the true final output path so history stores the right file."""
+        if d.get("status") == "finished":
+            info = d.get("info_dict", {})
+            # yt-dlp sets filepath on the info_dict after postprocessing
+            fp = info.get("filepath") or info.get("filename", "")
+            if fp and os.path.isfile(fp):
+                self._last_filename = fp
+                self._write_log(f"Post-process output: {fp}")
 
     def _set_progress(self, pct, label):
         self.act_progress_var.set(pct)

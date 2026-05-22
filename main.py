@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
+import customtkinter as ctk
 import threading
 import yt_dlp
 import os
@@ -10,17 +11,19 @@ import datetime
 import webbrowser
 
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image
     PILLOW = True
 except ImportError:
     PILLOW = False
+
+ctk.set_appearance_mode("light")
+ctk.set_default_color_theme("green")
 
 HISTORY_FILE = os.path.expanduser("~/.ytdl_history.json")
 THUMB_CACHE  = os.path.expanduser("~/.ytdl_cache/thumbnails")
 LOG_FILE     = os.path.expanduser("~/.ytdl_debug.log")
 DL_LOGS_DIR  = os.path.expanduser("~/.ytdl_cache/logs")
 
-# ── Canopy palette ─────────────────────────────────────────────────────────
 BG       = "#f5f3ee"
 TITLEBAR = "#eeeae2"
 CARD     = "#ffffff"
@@ -37,16 +40,9 @@ LOG_MUT  = "#7a7a70"
 LOG_DIM  = "#4a4a42"
 PROG_TRK = "#ece9e3"
 
-FONT_H    = ("Helvetica", 16, "bold")
-FONT_MED  = ("Helvetica", 14, "bold")
-FONT      = ("Helvetica", 13)
-FONT_SM   = ("Helvetica", 12)
-FONT_XS   = ("Helvetica", 10)
-FONT_PILL = ("Helvetica", 10, "bold")
 FONT_MONO = ("Menlo", 10)
-
-THUMB_W, THUMB_H = 88, 56   # video card thumbnail
-HIST_TW, HIST_TH = 68, 44   # history row thumbnail
+THUMB_W, THUMB_H = 88, 56
+HIST_TW,  HIST_TH  = 68, 44
 
 
 def _find_ffmpeg():
@@ -87,21 +83,22 @@ class CanopyApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Canopy")
-        self.root.geometry("580x820")
+        self.root.geometry("580x860")
         self.root.minsize(580, 600)
         self.root.resizable(False, True)
-        self.root.configure(bg=BG)
+        self.root.configure(fg_color=BG)
 
-        self.download_path       = os.path.expanduser("~/Downloads")
-        self.info                = None
-        self.is_fetching         = False
-        self.is_downloading      = False
-        self.activity_open       = True
-        self._thumb_refs         = {}
-        self._dl_log_handle      = None
-        self._dl_log_path        = None
+        self.download_path         = os.path.expanduser("~/Downloads")
+        self.info                  = None
+        self.is_fetching           = False
+        self.is_downloading        = False
+        self.activity_open         = True
+        self._thumb_refs           = {}
+        self._dl_log_handle        = None
+        self._dl_log_path          = None
         self._last_log_replaceable = False
-        self._download_completed = False
+        self._download_completed   = False
+        self._history_rows         = []
 
         self.format_var  = tk.StringVar(value="MP4")
         self.quality_var = tk.StringVar(value="Best")
@@ -113,7 +110,7 @@ class CanopyApp:
         self._build_ui()
         self._refresh_history()
 
-    # ── Logging ────────────────────────────────────────────────────────────
+    # ── Logging ──────────────────────────────────────────────────────────────
 
     def _setup_log(self):
         self._log_file = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
@@ -143,13 +140,9 @@ class CanopyApp:
             self._dl_log_path   = path
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._dl_log_handle.write(
-                f"Canopy — Process Log\n"
-                f"{'=' * 50}\n"
-                f"Date:    {now}\n"
-                f"Video:   {title}\n"
-                f"ID:      {video_id}\n"
-                f"ffmpeg:  {FFMPEG_PATH or 'NOT FOUND'}\n"
-                f"{'=' * 50}\n\n"
+                f"Canopy — Process Log\n{'=' * 50}\n"
+                f"Date:    {now}\nVideo:   {title}\nID:      {video_id}\n"
+                f"ffmpeg:  {FFMPEG_PATH or 'NOT FOUND'}\n{'=' * 50}\n\n"
             )
         except Exception:
             self._dl_log_handle = None
@@ -165,7 +158,7 @@ class CanopyApp:
                 pass
             self._dl_log_handle = None
 
-    # ── Persistence ────────────────────────────────────────────────────────
+    # ── Persistence ───────────────────────────────────────────────────────────
 
     def _load_history(self):
         try:
@@ -183,193 +176,245 @@ class CanopyApp:
         except Exception:
             pass
 
-    # ── UI build ───────────────────────────────────────────────────────────
+    # ── UI build ──────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         PAD = 22
 
-        # ── Title bar ──────────────────────────────────────────────────────
-        tbar = tk.Frame(self.root, bg=TITLEBAR, height=44)
+        # Title bar
+        tbar = ctk.CTkFrame(self.root, fg_color=TITLEBAR, corner_radius=0, height=44)
         tbar.pack(fill="x")
         tbar.pack_propagate(False)
 
-        tk.Label(tbar, text="Canopy", font=("Helvetica", 13, "bold"),
-                 bg=TITLEBAR, fg="#6b6560").place(relx=0.5, rely=0.5, anchor="center")
+        ctk.CTkLabel(tbar, text="Canopy",
+                     font=("Helvetica", 13, "bold"),
+                     text_color="#6b6560",
+                     fg_color="transparent").place(relx=0.5, rely=0.5, anchor="center")
 
-        hist_lnk = tk.Label(tbar, text="History", font=("Helvetica", 12, "bold"),
-                             bg=TITLEBAR, fg=ACCENT, cursor="hand2")
+        hist_lnk = ctk.CTkLabel(tbar, text="History",
+                                  font=("Helvetica", 12, "bold"),
+                                  text_color=ACCENT,
+                                  fg_color="transparent",
+                                  cursor="hand2")
         hist_lnk.place(relx=1.0, rely=0.5, anchor="e", x=-PAD)
-        hist_lnk.bind("<Button-1>", lambda e: self.hist_canvas.yview_moveto(1.0))
+        hist_lnk.bind("<Button-1>",
+                      lambda e: self.hist_scroll._parent_canvas.yview_moveto(1.0))
 
-        tk.Frame(self.root, bg=BORDER, height=1).pack(fill="x")
+        ctk.CTkFrame(self.root, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
-        # ── Body ───────────────────────────────────────────────────────────
-        body = tk.Frame(self.root, bg=BG)
-        body.pack(fill="both", expand=True)
+        # Fixed body (not scrollable — history has its own scroller)
+        body = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0)
+        body.pack(fill="x")
 
-        inner = tk.Frame(body, bg=BG)
+        inner = ctk.CTkFrame(body, fg_color=BG, corner_radius=0)
         inner.pack(fill="x", padx=PAD, pady=(20, 0))
 
-        # ── Section label ──────────────────────────────────────────────────
-        tk.Label(inner, text="VIDEO URL", font=("Helvetica", 9, "bold"),
-                 bg=BG, fg=MUTED).pack(anchor="w", pady=(0, 6))
+        # Section label
+        ctk.CTkLabel(inner, text="VIDEO URL",
+                     font=("Helvetica", 9, "bold"),
+                     text_color=MUTED,
+                     fg_color="transparent",
+                     anchor="w").pack(fill="x", pady=(0, 6))
 
-        # ── URL card ───────────────────────────────────────────────────────
-        url_card = tk.Frame(inner, bg=CARD,
-                            highlightbackground=BORDER, highlightthickness=1)
+        # URL card
+        url_card = ctk.CTkFrame(inner, fg_color=CARD,
+                                 corner_radius=14,
+                                 border_color=BORDER, border_width=1)
         url_card.pack(fill="x", pady=(0, 10))
 
-        url_row = tk.Frame(url_card, bg=CARD)
-        url_row.pack(fill="x", padx=14, pady=12)
+        url_row = ctk.CTkFrame(url_card, fg_color=CARD, corner_radius=0)
+        url_row.pack(fill="x", padx=14, pady=10)
 
-        tk.Label(url_row, text="⌁", font=("Helvetica", 16),
-                 bg=CARD, fg=DIM).pack(side="left")
+        ctk.CTkLabel(url_row, text="⌁",
+                     font=("Helvetica", 16),
+                     text_color=DIM,
+                     fg_color="transparent").pack(side="left")
 
-        self.url_var = tk.StringVar()
-        self.url_entry = tk.Entry(url_row, textvariable=self.url_var,
-                                  font=FONT, bg=CARD, fg=FG,
-                                  insertbackground=FG, relief="flat", bd=0,
-                                  highlightthickness=0)
-        self.url_entry.pack(side="left", fill="x", expand=True, ipady=2, padx=(8, 0))
+        self.url_entry = ctk.CTkEntry(url_row,
+                                       placeholder_text="Paste a YouTube URL...",
+                                       font=("Helvetica", 13),
+                                       fg_color=CARD,
+                                       text_color=FG,
+                                       placeholder_text_color=DIM,
+                                       border_width=0,
+                                       corner_radius=8)
+        self.url_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
         self.url_entry.bind("<Return>", lambda e: self._fetch_info())
 
-        self.fetch_btn = tk.Button(url_row, text="Fetch",
-                                   font=("Helvetica", 12, "bold"),
-                                   bg=ACCENT, fg="#fff", relief="flat", bd=0,
-                                   activebackground="#3d6b4a",
-                                   activeforeground="#fff",
-                                   cursor="hand2",
-                                   command=self._fetch_info)
-        self.fetch_btn.pack(side="left", padx=(10, 0), ipady=6, ipadx=14)
+        self.fetch_btn = ctk.CTkButton(url_row, text="Fetch",
+                                        font=("Helvetica", 12, "bold"),
+                                        fg_color=ACCENT,
+                                        hover_color="#3d6b4a",
+                                        text_color="#ffffff",
+                                        corner_radius=10,
+                                        width=72, height=34,
+                                        command=self._fetch_info)
+        self.fetch_btn.pack(side="left", padx=(10, 0))
 
-        # ── Video info card ────────────────────────────────────────────────
-        self.video_card = tk.Frame(inner, bg=CARD,
-                                   highlightbackground=BORDER, highlightthickness=1)
+        # Video info card
+        self.video_card = ctk.CTkFrame(inner, fg_color=CARD,
+                                        corner_radius=14,
+                                        border_color=BORDER, border_width=1)
         self.video_card.pack(fill="x", pady=(0, 10))
 
-        vc_inner = tk.Frame(self.video_card, bg=CARD)
+        vc_inner = ctk.CTkFrame(self.video_card, fg_color=CARD, corner_radius=0)
         vc_inner.pack(fill="x", padx=14, pady=12)
 
-        # Thumbnail
-        self.vc_thumb_box = tk.Frame(vc_inner, bg="#c8e6d4",
-                                     width=THUMB_W, height=THUMB_H)
+        self.vc_thumb_box = ctk.CTkFrame(vc_inner, fg_color="#c8e6d4",
+                                          corner_radius=10,
+                                          width=THUMB_W, height=THUMB_H)
         self.vc_thumb_box.pack(side="left")
         self.vc_thumb_box.pack_propagate(False)
-        self.vc_thumb_lbl = tk.Label(self.vc_thumb_box, text="▶",
-                                     font=("Helvetica", 18),
-                                     bg="#c8e6d4", fg="#4a7c59")
+
+        self.vc_thumb_lbl = ctk.CTkLabel(self.vc_thumb_box, text="▶",
+                                          font=("Helvetica", 18),
+                                          text_color=ACCENT,
+                                          fg_color="transparent")
         self.vc_thumb_lbl.pack(expand=True)
         self._vc_photo = None
 
-        # Info
-        vc_info = tk.Frame(vc_inner, bg=CARD)
+        vc_info = ctk.CTkFrame(vc_inner, fg_color=CARD, corner_radius=0)
         vc_info.pack(side="left", fill="x", expand=True, padx=(12, 0))
 
-        self.vc_title = tk.Label(vc_info, text="Paste a YouTube URL to get started",
-                                 font=("Helvetica", 12, "bold"),
-                                 bg=CARD, fg=MUTED, anchor="w",
-                                 wraplength=340, justify="left")
+        self.vc_title = ctk.CTkLabel(vc_info,
+                                      text="Paste a YouTube URL to get started",
+                                      font=("Helvetica", 12, "bold"),
+                                      text_color=MUTED,
+                                      fg_color="transparent",
+                                      anchor="w", justify="left",
+                                      wraplength=340)
         self.vc_title.pack(fill="x")
 
-        self.vc_meta = tk.Label(vc_info, text="",
-                                font=FONT_XS, bg=CARD, fg=MUTED, anchor="w")
+        self.vc_meta = ctk.CTkLabel(vc_info, text="",
+                                     font=("Helvetica", 10),
+                                     text_color=MUTED,
+                                     fg_color="transparent",
+                                     anchor="w")
         self.vc_meta.pack(fill="x", pady=(3, 0))
 
-        pill_row = tk.Frame(vc_info, bg=CARD)
+        pill_row = ctk.CTkFrame(vc_info, fg_color=CARD, corner_radius=0)
         pill_row.pack(fill="x", pady=(7, 0))
-        self.vc_fmt_pill  = tk.Label(pill_row, text="MP4",
-                                     font=FONT_PILL, bg=PILL_BG, fg=PILL_FG,
-                                     padx=8, pady=2)
+
+        self.vc_fmt_pill = ctk.CTkLabel(pill_row, text="MP4",
+                                         font=("Helvetica", 10, "bold"),
+                                         fg_color=PILL_BG,
+                                         text_color=PILL_FG,
+                                         corner_radius=10,
+                                         padx=8, pady=2)
         self.vc_fmt_pill.pack(side="left")
-        self.vc_qual_pill = tk.Label(pill_row, text="Best",
-                                     font=FONT_PILL, bg="#e8ede6", fg="#5a7060",
-                                     padx=8, pady=2)
+
+        self.vc_qual_pill = ctk.CTkLabel(pill_row, text="Best",
+                                          font=("Helvetica", 10, "bold"),
+                                          fg_color="#e8ede6",
+                                          text_color="#5a7060",
+                                          corner_radius=10,
+                                          padx=8, pady=2)
         self.vc_qual_pill.pack(side="left", padx=(6, 0))
 
-        # ── Options row ────────────────────────────────────────────────────
-        opts_row = tk.Frame(inner, bg=BG)
+        # Options row
+        opts_row = ctk.CTkFrame(inner, fg_color=BG, corner_radius=0)
         opts_row.pack(fill="x", pady=(0, 10))
 
-        self._opt_fmt  = self._option_card(opts_row, "FORMAT",  self.format_var,
-                                           ["MP4", "MP3", "M4A", "WEBM"])
+        self._opt_fmt = self._option_card(opts_row, "FORMAT", self.format_var,
+                                          ["MP4", "MP3", "M4A", "WEBM"])
         self._opt_fmt.pack(side="left", fill="x", expand=True)
 
-        tk.Frame(opts_row, bg=BG, width=8).pack(side="left")
+        ctk.CTkFrame(opts_row, fg_color=BG, width=8, corner_radius=0).pack(side="left")
 
         self._opt_qual = self._option_card(opts_row, "QUALITY", self.quality_var,
                                            ["Best", "1080p", "720p", "480p", "360p"])
         self._opt_qual.pack(side="left", fill="x", expand=True)
 
-        tk.Frame(opts_row, bg=BG, width=8).pack(side="left")
+        ctk.CTkFrame(opts_row, fg_color=BG, width=8, corner_radius=0).pack(side="left")
 
-        save_card = tk.Frame(opts_row, bg=CARD,
-                             highlightbackground=BORDER, highlightthickness=1,
-                             cursor="hand2")
+        save_card = ctk.CTkFrame(opts_row, fg_color=CARD,
+                                  corner_radius=14,
+                                  border_color=BORDER, border_width=1,
+                                  cursor="hand2")
         save_card.pack(side="left", fill="x", expand=True)
-        tk.Label(save_card, text="SAVE TO", font=("Helvetica", 9, "bold"),
-                 bg=CARD, fg=MUTED).pack(anchor="w", padx=12, pady=(10, 0))
-        save_val = tk.Frame(save_card, bg=CARD)
-        save_val.pack(fill="x", padx=12, pady=(2, 10))
-        self.folder_label = tk.Label(save_val,
-                                     text=self._short_path(self.download_path),
-                                     font=("Helvetica", 12, "bold"),
-                                     bg=CARD, fg=ACCENT, anchor="w")
-        self.folder_label.pack(side="left")
-        tk.Label(save_val, text="▾", font=FONT_XS, bg=CARD, fg=DIM).pack(side="left", padx=(4, 0))
-        save_card.bind("<Button-1>", lambda e: self._pick_folder())
-        for w in save_card.winfo_children():
-            w.bind("<Button-1>", lambda e: self._pick_folder())
 
-        # Update pills when format/quality change
+        ctk.CTkLabel(save_card, text="SAVE TO",
+                     font=("Helvetica", 9, "bold"),
+                     text_color=MUTED,
+                     fg_color="transparent",
+                     anchor="w").pack(anchor="w", padx=12, pady=(10, 0))
+
+        save_val = ctk.CTkFrame(save_card, fg_color=CARD, corner_radius=0)
+        save_val.pack(fill="x", padx=12, pady=(2, 10))
+
+        self.folder_label = ctk.CTkLabel(save_val,
+                                          text=self._short_path(self.download_path),
+                                          font=("Helvetica", 12, "bold"),
+                                          text_color=ACCENT,
+                                          fg_color="transparent",
+                                          anchor="w")
+        self.folder_label.pack(side="left")
+
+        ctk.CTkLabel(save_val, text="▾",
+                     font=("Helvetica", 10),
+                     text_color=DIM,
+                     fg_color="transparent").pack(side="left", padx=(4, 0))
+
+        def _pick_click(e=None):
+            self._pick_folder()
+
+        save_card.bind("<Button-1>", _pick_click)
+        for w in save_card.winfo_children():
+            w.bind("<Button-1>", _pick_click)
+
         self.format_var.trace_add("write",  lambda *_: self._sync_pills())
         self.quality_var.trace_add("write", lambda *_: self._sync_pills())
 
-        # ── Progress card ──────────────────────────────────────────────────
+        # Progress card
         self._build_progress_card(inner)
 
-        # ── Download button ────────────────────────────────────────────────
-        self.dl_btn = tk.Button(inner, text="Download",
-                                font=("Helvetica", 15, "bold"),
-                                bg=ACCENT, fg="#fff", relief="flat", bd=0,
-                                activebackground="#3d6b4a",
-                                activeforeground="#fff",
-                                cursor="hand2", state="disabled",
-                                command=self._start_download)
-        self.dl_btn.pack(fill="x", pady=(0, 20), ipady=13)
+        # Download button
+        self.dl_btn = ctk.CTkButton(inner, text="Download",
+                                     font=("Helvetica", 15, "bold"),
+                                     fg_color=ACCENT,
+                                     hover_color="#3d6b4a",
+                                     text_color="#ffffff",
+                                     corner_radius=14,
+                                     height=50,
+                                     state="disabled",
+                                     command=self._start_download)
+        self.dl_btn.pack(fill="x", pady=(0, 20))
 
-        # ── Divider ────────────────────────────────────────────────────────
-        tk.Frame(self.root, bg=BORDER, height=1).pack(fill="x",
-                                                       padx=0, pady=(0, 0))
+        # Divider
+        ctk.CTkFrame(self.root, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
-        # ── History section ────────────────────────────────────────────────
+        # History section
         self._build_history_section(PAD)
 
-        # ── TTK style ──────────────────────────────────────────────────────
-        style = ttk.Style()
-        style.theme_use("default")
-        style.configure("Canopy.Horizontal.TProgressbar",
-                        troughcolor=PROG_TRK, background=ACCENT,
-                        thickness=5, borderwidth=0, relief="flat")
-        style.configure("TScrollbar", background=BG, troughcolor=BG,
-                        borderwidth=0, relief="flat")
-
     def _option_card(self, parent, label, var, choices):
-        card = tk.Frame(parent, bg=CARD,
-                        highlightbackground=BORDER, highlightthickness=1,
-                        cursor="hand2")
-        tk.Label(card, text=label, font=("Helvetica", 9, "bold"),
-                 bg=CARD, fg=MUTED).pack(anchor="w", padx=12, pady=(10, 0))
-        val_row = tk.Frame(card, bg=CARD)
+        card = ctk.CTkFrame(parent, fg_color=CARD,
+                             corner_radius=14,
+                             border_color=BORDER, border_width=1,
+                             cursor="hand2")
+
+        ctk.CTkLabel(card, text=label,
+                     font=("Helvetica", 9, "bold"),
+                     text_color=MUTED,
+                     fg_color="transparent",
+                     anchor="w").pack(anchor="w", padx=12, pady=(10, 0))
+
+        val_row = ctk.CTkFrame(card, fg_color=CARD, corner_radius=0)
         val_row.pack(fill="x", padx=12, pady=(2, 10))
-        val_lbl = tk.Label(val_row, textvariable=var,
-                           font=("Helvetica", 14, "bold"),
-                           bg=CARD, fg=FG, anchor="w")
+
+        val_lbl = ctk.CTkLabel(val_row, textvariable=var,
+                                font=("Helvetica", 14, "bold"),
+                                text_color=FG,
+                                fg_color="transparent",
+                                anchor="w")
         val_lbl.pack(side="left")
-        tk.Label(val_row, text="▾", font=FONT_XS, bg=CARD, fg=DIM).pack(
-            side="left", padx=(4, 0))
+
+        ctk.CTkLabel(val_row, text="▾",
+                     font=("Helvetica", 10),
+                     text_color=DIM,
+                     fg_color="transparent").pack(side="left", padx=(4, 0))
 
         def show_menu(e=None):
-            m = tk.Menu(card, tearoff=0, font=FONT_SM,
+            m = tk.Menu(card, tearoff=0, font=("Helvetica", 12),
                         bg=CARD, fg=FG,
                         activebackground=ACCENT, activeforeground="#fff")
             for c in choices:
@@ -386,65 +431,79 @@ class CanopyApp:
         return card
 
     def _sync_pills(self):
-        fmt = self.format_var.get()
+        fmt  = self.format_var.get()
         qual = self.quality_var.get()
-        self.vc_fmt_pill.config(text=fmt.upper())
-        self.vc_qual_pill.config(text=qual)
+        self.vc_fmt_pill.configure(text=fmt.upper())
+        self.vc_qual_pill.configure(text=qual)
 
     def _build_progress_card(self, parent):
-        self.prog_card = tk.Frame(parent, bg=CARD,
-                                  highlightbackground=BORDER, highlightthickness=1)
+        self.prog_card = ctk.CTkFrame(parent, fg_color=CARD,
+                                       corner_radius=14,
+                                       border_color=BORDER, border_width=1)
         self.prog_card.pack(fill="x", pady=(0, 10))
 
-        pc = tk.Frame(self.prog_card, bg=CARD)
+        pc = ctk.CTkFrame(self.prog_card, fg_color=CARD, corner_radius=0)
         pc.pack(fill="x", padx=14, pady=(12, 8))
 
-        # Status row
-        status_row = tk.Frame(pc, bg=CARD)
+        status_row = ctk.CTkFrame(pc, fg_color=CARD, corner_radius=0)
         status_row.pack(fill="x")
-        self.prog_status = tk.Label(status_row, text="Ready",
-                                    font=("Helvetica", 12, "bold"),
-                                    bg=CARD, fg=ACCENT, anchor="w")
+
+        self.prog_status = ctk.CTkLabel(status_row, text="Ready",
+                                         font=("Helvetica", 12, "bold"),
+                                         text_color=ACCENT,
+                                         fg_color="transparent",
+                                         anchor="w")
         self.prog_status.pack(side="left")
-        self.prog_detail = tk.Label(status_row, text="",
-                                    font=FONT_XS, bg=CARD, fg=MUTED, anchor="e")
+
+        self.prog_detail = ctk.CTkLabel(status_row, text="",
+                                         font=("Helvetica", 10),
+                                         text_color=MUTED,
+                                         fg_color="transparent",
+                                         anchor="e")
         self.prog_detail.pack(side="right")
 
-        # Progress bar
-        self.act_progress_var = tk.DoubleVar()
-        self.act_bar = ttk.Progressbar(pc, variable=self.act_progress_var,
-                                       maximum=100,
-                                       style="Canopy.Horizontal.TProgressbar")
+        self.act_bar = ctk.CTkProgressBar(pc,
+                                           fg_color=PROG_TRK,
+                                           progress_color=ACCENT,
+                                           corner_radius=99,
+                                           height=5)
+        self.act_bar.set(0)
         self.act_bar.pack(fill="x", pady=(8, 0))
 
-        # Log toggle
-        tog_row = tk.Frame(pc, bg=CARD, cursor="hand2")
+        tog_row = ctk.CTkFrame(pc, fg_color=CARD, corner_radius=0, cursor="hand2")
         tog_row.pack(fill="x", pady=(8, 0))
-        self.log_chevron = tk.Label(tog_row, text="▾", font=("Helvetica", 10),
-                                    bg=CARD, fg=DIM, cursor="hand2")
+
+        self.log_chevron = ctk.CTkLabel(tog_row, text="▾",
+                                         font=("Helvetica", 10),
+                                         text_color=DIM,
+                                         fg_color="transparent",
+                                         cursor="hand2")
         self.log_chevron.pack(side="left")
-        tk.Label(tog_row, text="  Activity log", font=FONT_XS,
-                 bg=CARD, fg=MUTED, cursor="hand2").pack(side="left")
-        tog_row.bind("<Button-1>",      lambda e: self._toggle_activity())
-        self.log_chevron.bind("<Button-1>", lambda e: self._toggle_activity())
+
+        ctk.CTkLabel(tog_row, text="  Activity log",
+                     font=("Helvetica", 10),
+                     text_color=MUTED,
+                     fg_color="transparent",
+                     cursor="hand2").pack(side="left")
+
+        tog_row.bind("<Button-1>", lambda e: self._toggle_activity())
         for w in tog_row.winfo_children():
             w.bind("<Button-1>", lambda e: self._toggle_activity())
 
-        # Dark terminal log
-        self.log_body = tk.Frame(pc, bg=CARD)
+        self.log_body = ctk.CTkFrame(pc, fg_color=CARD, corner_radius=0)
         self.log_body.pack(fill="x", pady=(6, 0))
 
-        log_bg_frame = tk.Frame(self.log_body, bg=LOG_BG)
-        log_bg_frame.pack(fill="x")
+        log_bg = ctk.CTkFrame(self.log_body, fg_color=LOG_BG, corner_radius=10)
+        log_bg.pack(fill="x")
 
-        self._log_text = tk.Text(log_bg_frame, bg=LOG_BG, fg=LOG_MUT,
-                                 font=FONT_MONO, height=6,
-                                 relief="flat", bd=0,
-                                 state="disabled", wrap="char",
-                                 padx=12, pady=10,
-                                 highlightthickness=0,
-                                 insertbackground=LOG_GRN,
-                                 selectbackground=ACCENT)
+        self._log_text = tk.Text(log_bg, bg=LOG_BG, fg=LOG_MUT,
+                                  font=FONT_MONO, height=6,
+                                  relief="flat", bd=0,
+                                  state="disabled", wrap="char",
+                                  padx=12, pady=10,
+                                  highlightthickness=0,
+                                  insertbackground=LOG_GRN,
+                                  selectbackground=ACCENT)
         self._log_text.pack(fill="x")
         self._log_text.tag_config("ts",      foreground="#5a5a50")
         self._log_text.tag_config("green",   foreground=LOG_GRN)
@@ -458,34 +517,30 @@ class CanopyApp:
         self._log("Waiting for a URL...", "dim")
 
     def _build_history_section(self, PAD):
-        hist_hdr = tk.Frame(self.root, bg=BG)
+        hist_hdr = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0)
         hist_hdr.pack(fill="x", padx=PAD, pady=(16, 10))
-        tk.Label(hist_hdr, text="Recent Downloads",
-                 font=FONT_H, bg=BG, fg=FG).pack(side="left")
-        self.hist_count = tk.Label(hist_hdr, text="", font=FONT_XS, bg=BG, fg=MUTED)
+
+        ctk.CTkLabel(hist_hdr, text="Recent Downloads",
+                     font=("Helvetica", 16, "bold"),
+                     text_color=FG,
+                     fg_color="transparent").pack(side="left")
+
+        self.hist_count = ctk.CTkLabel(hist_hdr, text="",
+                                        font=("Helvetica", 10),
+                                        text_color=MUTED,
+                                        fg_color="transparent")
         self.hist_count.pack(side="left", padx=(8, 0))
 
-        container = tk.Frame(self.root, bg=BG)
-        container.pack(fill="both", expand=True, padx=PAD, pady=(0, 24))
+        self.hist_scroll = ctk.CTkScrollableFrame(
+            self.root,
+            fg_color=BG,
+            scrollbar_button_color=BORDER,
+            scrollbar_button_hover_color=MUTED,
+            corner_radius=0,
+        )
+        self.hist_scroll.pack(fill="both", expand=True, padx=PAD, pady=(0, 24))
 
-        self.hist_canvas = tk.Canvas(container, bg=BG, highlightthickness=0)
-        sb = ttk.Scrollbar(container, orient="vertical",
-                           command=self.hist_canvas.yview)
-        self.hist_inner = tk.Frame(self.hist_canvas, bg=BG)
-        self.hist_inner.bind(
-            "<Configure>",
-            lambda e: self.hist_canvas.configure(
-                scrollregion=self.hist_canvas.bbox("all")))
-        self.hist_canvas.create_window((0, 0), window=self.hist_inner, anchor="nw")
-        self.hist_canvas.configure(yscrollcommand=sb.set)
-        self.hist_canvas.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-
-        self.hist_canvas.bind_all(
-            "<MouseWheel>",
-            lambda e: self.hist_canvas.yview_scroll(-1 * (e.delta // 120), "units"))
-
-    # ── Activity log helpers ───────────────────────────────────────────────
+    # ── Activity log helpers ──────────────────────────────────────────────────
 
     def _log(self, text, kind="muted"):
         ts = datetime.datetime.now().strftime("%H:%M:%S")
@@ -513,49 +568,48 @@ class CanopyApp:
         self._last_log_replaceable = False
 
     def _pill(self, text, bg=None, fg=None):
-        """Update the progress status label (replaces the old pill badge)."""
         color_map = {
-            "Idle":        (MUTED, CARD),
-            "Fetching":    (ACCENT, CARD),
-            "Ready":       (ACCENT, CARD),
-            "Downloading": (ACCENT, CARD),
-            "Done":        (ACCENT, CARD),
-            "Error":       ("#cc3333", CARD),
+            "Idle":        MUTED,
+            "Fetching":    ACCENT,
+            "Ready":       ACCENT,
+            "Downloading": ACCENT,
+            "Done":        ACCENT,
+            "Error":       "#cc3333",
         }
-        color = color_map.get(text, (MUTED, CARD))[0]
-        self.prog_status.config(text=text, fg=color)
+        self.prog_status.configure(text=text,
+                                   text_color=color_map.get(text, MUTED))
 
     def _toggle_activity(self):
         self.activity_open = not self.activity_open
         if self.activity_open:
             self.log_body.pack(fill="x", pady=(6, 0))
-            self.log_chevron.config(text="▾")
+            self.log_chevron.configure(text="▾")
         else:
             self.log_body.pack_forget()
-            self.log_chevron.config(text="▸")
+            self.log_chevron.configure(text="▸")
 
-    # ── Actions ────────────────────────────────────────────────────────────
+    # ── Actions ───────────────────────────────────────────────────────────────
 
     def _pick_folder(self):
         folder = filedialog.askdirectory(initialdir=self.download_path)
         if folder:
             self.download_path = folder
-            self.folder_label.config(text=self._short_path(folder))
+            self.folder_label.configure(text=self._short_path(folder))
 
     def _fetch_info(self):
-        url = self.url_var.get().strip()
+        url = self.url_entry.get().strip()
         if not url or self.is_fetching or self.is_downloading:
             return
         self.is_fetching = True
-        self.fetch_btn.config(state="disabled")
-        self.dl_btn.config(state="disabled")
-        self.vc_title.config(text="Fetching video info...", fg=MUTED)
-        self.vc_meta.config(text="")
+        self.fetch_btn.configure(state="disabled")
+        self.dl_btn.configure(state="disabled")
+        self.vc_title.configure(text="Fetching video info...", text_color=MUTED)
+        self.vc_meta.configure(text="")
         self._log_clear()
         self._log(f"Fetching: {url[:60]}", "green")
         self._pill("Fetching")
-        self.act_progress_var.set(0)
-        self.prog_detail.config(text="")
+        self.act_bar.set(0)
+        self.prog_detail.configure(text="")
         threading.Thread(target=self._do_fetch, args=(url,), daemon=True).start()
 
     def _do_fetch(self, url):
@@ -564,26 +618,27 @@ class CanopyApp:
             with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True,
                                     "skip_download": True}) as ydl:
                 self.info = ydl.extract_info(url, download=False)
-            title    = self.info.get("title", "Unknown")
-            uploader = self.info.get("uploader", "")
-            duration = self.info.get("duration_string", "")
+            title     = self.info.get("title", "Unknown")
+            uploader  = self.info.get("uploader", "")
+            duration  = self.info.get("duration_string", "")
             thumb_url = self.info.get("thumbnail", "")
             video_id  = self.info.get("id", "")
             self._write_log(f"Info OK  title={title!r}")
-            parts   = [p for p in (uploader, duration) if p]
-            meta    = "  ·  ".join(parts)
-            self.root.after(0, lambda: self._on_fetch_done(title, meta, thumb_url, video_id, True))
+            parts = [p for p in (uploader, duration) if p]
+            meta  = "  ·  ".join(parts)
+            self.root.after(0, lambda: self._on_fetch_done(
+                title, meta, thumb_url, video_id, True))
         except Exception as e:
             self._write_log(f"Fetch error: {e}")
             self.root.after(0, lambda: self._on_fetch_done(str(e), "", "", "", False))
 
     def _on_fetch_done(self, title, meta, thumb_url, video_id, success):
         self.is_fetching = False
-        self.fetch_btn.config(state="normal")
+        self.fetch_btn.configure(state="normal")
         if success:
-            self.vc_title.config(text=title, fg=FG)
-            self.vc_meta.config(text=meta)
-            self.dl_btn.config(state="normal")
+            self.vc_title.configure(text=title, text_color=FG)
+            self.vc_meta.configure(text=meta)
+            self.dl_btn.configure(state="normal")
             self._log(f"Found: {title[:55]}", "muted")
             if meta:
                 self._log(meta, "dim")
@@ -592,7 +647,8 @@ class CanopyApp:
                 threading.Thread(target=self._load_vc_thumb,
                                  args=(thumb_url, video_id), daemon=True).start()
         else:
-            self.vc_title.config(text="Could not fetch video info", fg="#cc3333")
+            self.vc_title.configure(text="Could not fetch video info",
+                                    text_color="#cc3333")
             self._log(f"Error: {title[:80]}", "error")
             self._pill("Error")
 
@@ -609,13 +665,13 @@ class CanopyApp:
                 return
         if PILLOW and os.path.exists(cached):
             try:
-                img   = Image.open(cached).convert("RGB")
-                img   = img.resize((THUMB_W, THUMB_H), Image.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
+                img     = Image.open(cached).convert("RGB")
+                img     = img.resize((THUMB_W, THUMB_H), Image.LANCZOS)
+                ctk_img = ctk.CTkImage(light_image=img, size=(THUMB_W, THUMB_H))
                 def _apply():
-                    self._vc_photo = photo
-                    self.vc_thumb_lbl.config(image=photo, text="", bg="#1c1c1e")
-                    self.vc_thumb_box.config(bg="#1c1c1e")
+                    self._vc_photo = ctk_img
+                    self.vc_thumb_lbl.configure(image=ctk_img, text="")
+                    self.vc_thumb_box.configure(fg_color="#1c1c1e")
                 self.root.after(0, _apply)
             except Exception:
                 pass
@@ -629,63 +685,73 @@ class CanopyApp:
             return
         self._show_download_picker()
 
-    # ── Download picker dialog ─────────────────────────────────────────────
+    # ── Download picker dialog ────────────────────────────────────────────────
 
     def _show_download_picker(self):
-        title     = self.info.get("title", "Unknown")
-        uploader  = self.info.get("uploader", "")
-        duration  = self.info.get("duration_string", "")
-        video_id  = self.info.get("id", "")
+        title    = self.info.get("title", "Unknown")
+        uploader = self.info.get("uploader", "")
+        duration = self.info.get("duration_string", "")
+        video_id = self.info.get("id", "")
 
         DIALOG_W = 400
         THUMB_DH = 225
 
-        dlg = tk.Toplevel(self.root)
+        dlg = ctk.CTkToplevel(self.root)
         dlg.title("")
         dlg.resizable(False, False)
-        dlg.configure(bg=CARD)
+        dlg.configure(fg_color=CARD)
         dlg.transient(self.root)
         dlg.grab_set()
 
-        # Thumbnail
-        thumb_bg = tk.Frame(dlg, bg="#c8e6d4", width=DIALOG_W, height=THUMB_DH)
+        thumb_bg = ctk.CTkFrame(dlg, fg_color="#c8e6d4", corner_radius=0,
+                                  width=DIALOG_W, height=THUMB_DH)
         thumb_bg.pack(fill="x")
         thumb_bg.pack_propagate(False)
-        thumb_lbl = tk.Label(thumb_bg, bg="#c8e6d4", text="▶",
-                             font=("Helvetica", 40), fg=ACCENT)
+
+        thumb_lbl = ctk.CTkLabel(thumb_bg, text="▶",
+                                  font=("Helvetica", 40),
+                                  text_color=ACCENT,
+                                  fg_color="transparent")
         thumb_lbl.pack(expand=True)
         dlg._photo = None
 
-        def _load():
+        def _load_thumb():
             cached = os.path.join(THUMB_CACHE, f"{video_id}.jpg") if video_id else ""
             if cached and os.path.exists(cached) and PILLOW:
                 try:
-                    img   = Image.open(cached).convert("RGB")
-                    img   = img.resize((DIALOG_W, THUMB_DH), Image.LANCZOS)
-                    photo = ImageTk.PhotoImage(img)
+                    img     = Image.open(cached).convert("RGB")
+                    img     = img.resize((DIALOG_W, THUMB_DH), Image.LANCZOS)
+                    ctk_img = ctk.CTkImage(light_image=img, size=(DIALOG_W, THUMB_DH))
                     def _apply():
                         if dlg.winfo_exists():
-                            thumb_lbl.config(image=photo, text="", bg="#1c1c1e")
-                            thumb_bg.config(bg="#1c1c1e")
-                            dlg._photo = photo
+                            thumb_lbl.configure(image=ctk_img, text="")
+                            thumb_bg.configure(fg_color="#1c1c1e")
+                            dlg._photo = ctk_img
                     dlg.after(0, _apply)
                 except Exception:
                     pass
 
-        threading.Thread(target=_load, daemon=True).start()
+        threading.Thread(target=_load_thumb, daemon=True).start()
 
-        # Info
-        info_f = tk.Frame(dlg, bg=CARD)
+        info_f = ctk.CTkFrame(dlg, fg_color=CARD, corner_radius=0)
         info_f.pack(fill="x", padx=20, pady=(16, 12))
-        tk.Label(info_f, text=title, font=("Helvetica", 13, "bold"),
-                 bg=CARD, fg=FG, anchor="w",
-                 wraplength=360, justify="left").pack(fill="x")
+
+        ctk.CTkLabel(info_f, text=title,
+                     font=("Helvetica", 13, "bold"),
+                     text_color=FG,
+                     fg_color="transparent",
+                     anchor="w", justify="left",
+                     wraplength=360).pack(fill="x")
+
         detail = "  ·  ".join(p for p in (uploader, duration) if p)
         if detail:
-            tk.Label(info_f, text=detail, font=FONT_XS,
-                     bg=CARD, fg=MUTED, anchor="w").pack(fill="x", pady=(5, 0))
+            ctk.CTkLabel(info_f, text=detail,
+                         font=("Helvetica", 10),
+                         text_color=MUTED,
+                         fg_color="transparent",
+                         anchor="w").pack(fill="x", pady=(5, 0))
 
-        tk.Frame(dlg, bg=BORDER, height=1).pack(fill="x")
+        ctk.CTkFrame(dlg, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
         options = [
             ("1080p HD",    "mp4", "1080p", "▶", "Best quality  ·  H.264  ·  MP4"),
@@ -701,28 +767,50 @@ class CanopyApp:
                 self.quality_var.set(q)
                 self._begin_download(f, q)
 
-            row = tk.Frame(dlg, bg=CARD, cursor="hand2")
+            row = ctk.CTkFrame(dlg, fg_color=CARD, corner_radius=0, cursor="hand2")
             row.pack(fill="x")
-            pad = tk.Frame(row, bg=CARD)
+
+            pad = ctk.CTkFrame(row, fg_color=CARD, corner_radius=0)
             pad.pack(fill="x", padx=20, pady=13)
-            tk.Label(pad, text=icon, font=("Helvetica", 16),
-                     bg=CARD, fg=ACCENT, width=2).pack(side="left")
-            col = tk.Frame(pad, bg=CARD)
+
+            ctk.CTkLabel(pad, text=icon,
+                         font=("Helvetica", 16),
+                         text_color=ACCENT,
+                         fg_color="transparent",
+                         width=24).pack(side="left")
+
+            col = ctk.CTkFrame(pad, fg_color=CARD, corner_radius=0)
             col.pack(side="left", padx=(12, 0), fill="x", expand=True)
-            tk.Label(col, text=opt_label, font=("Helvetica", 13, "bold"),
-                     bg=CARD, fg=FG, anchor="w").pack(anchor="w")
-            tk.Label(col, text=sub, font=FONT_XS,
-                     bg=CARD, fg=MUTED, anchor="w").pack(anchor="w", pady=(2, 0))
-            tk.Label(pad, text="›", font=("Helvetica", 20),
-                     bg=CARD, fg=DIM).pack(side="right")
-            tk.Frame(dlg, bg=BORDER, height=1).pack(fill="x")
+
+            ctk.CTkLabel(col, text=opt_label,
+                         font=("Helvetica", 13, "bold"),
+                         text_color=FG,
+                         fg_color="transparent",
+                         anchor="w").pack(anchor="w")
+
+            ctk.CTkLabel(col, text=sub,
+                         font=("Helvetica", 10),
+                         text_color=MUTED,
+                         fg_color="transparent",
+                         anchor="w").pack(anchor="w", pady=(2, 0))
+
+            ctk.CTkLabel(pad, text="›",
+                         font=("Helvetica", 20),
+                         text_color=DIM,
+                         fg_color="transparent").pack(side="right")
+
+            ctk.CTkFrame(dlg, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
             self._bind_picker_row(row, _pick)
 
-        tk.Button(dlg, text="Cancel", font=FONT_SM,
-                  bg=CARD, fg=MUTED, relief="flat", bd=0,
-                  cursor="hand2", pady=13,
-                  activebackground=CARD, activeforeground=FG,
-                  command=dlg.destroy).pack(fill="x")
+        ctk.CTkButton(dlg, text="Cancel",
+                      font=("Helvetica", 12),
+                      fg_color=CARD,
+                      hover_color="#f0ede8",
+                      text_color=MUTED,
+                      corner_radius=0,
+                      height=48,
+                      border_width=0,
+                      command=dlg.destroy).pack(fill="x")
 
         dlg.update_idletasks()
         dh = dlg.winfo_reqheight()
@@ -739,31 +827,34 @@ class CanopyApp:
 
     def _row_bg(self, widget, color):
         try:
-            widget.config(bg=color)
+            widget.configure(fg_color=color)
         except Exception:
-            pass
+            try:
+                widget.configure(bg=color)
+            except Exception:
+                pass
         for child in widget.winfo_children():
             self._row_bg(child, color)
 
     def _begin_download(self, fmt, quality):
         if not self.info or self.is_downloading:
             return
-        url      = self.url_var.get().strip()
+        url      = self.url_entry.get().strip()
         title    = self.info.get("title", "Unknown")
         video_id = self.info.get("id", "unknown")
         self.is_downloading      = True
         self._download_completed = False
         self._open_dl_log(video_id, title)
-        self.dl_btn.config(state="disabled")
-        self.fetch_btn.config(state="disabled")
-        self.act_progress_var.set(0)
-        self.prog_detail.config(text="")
+        self.dl_btn.configure(state="disabled")
+        self.fetch_btn.configure(state="disabled")
+        self.act_bar.set(0)
+        self.prog_detail.configure(text="")
         self._log(f"Starting {fmt.upper()} {quality} download...", "green")
         self._pill("Downloading")
         threading.Thread(target=self._do_download,
                          args=(url, fmt, quality), daemon=True).start()
 
-    # ── Download logic (unchanged) ─────────────────────────────────────────
+    # ── Download logic (unchanged) ────────────────────────────────────────────
 
     def _do_download(self, url, fmt, quality):
         self._write_log(f"Download start  url={url}  fmt={fmt}  quality={quality}")
@@ -802,7 +893,8 @@ class CanopyApp:
                     ydl_fmt = (f"bestvideo[height<={h}][ext={fmt}]+bestaudio"
                                f"/bestvideo[height<={h}]+bestaudio/best")
                 else:
-                    ydl_fmt = f"bestvideo[ext={fmt}]+bestaudio/bestvideo+bestaudio/best"
+                    ydl_fmt = (f"bestvideo[ext={fmt}]+bestaudio"
+                               f"/bestvideo+bestaudio/best")
                 postprocessors = []
 
             outtmpl = os.path.join(self.download_path, "%(title)s.%(ext)s")
@@ -890,14 +982,14 @@ class CanopyApp:
     def _postprocessor_hook(self, d):
         if d.get("status") == "finished":
             info = d.get("info_dict", {})
-            fp = info.get("filepath") or info.get("filename", "")
+            fp   = info.get("filepath") or info.get("filename", "")
             if fp and os.path.isfile(fp):
                 self._last_filename = fp
                 self._write_log(f"Post-process output: {fp}")
 
     def _set_progress(self, pct, detail):
-        self.act_progress_var.set(pct)
-        self.prog_detail.config(text=detail)
+        self.act_bar.set(pct / 100)
+        self.prog_detail.configure(text=detail)
         self._log_update(f"Downloading  {detail}", "active")
 
     def _on_download_done(self):
@@ -905,15 +997,15 @@ class CanopyApp:
             return
         self._download_completed = True
         self.is_downloading = False
-        self.act_progress_var.set(100)
-        self.prog_detail.config(text="")
+        self.act_bar.set(1.0)
+        self.prog_detail.configure(text="")
         self._write_log(f"Download complete. Folder: {self.download_path}")
         self._close_dl_log()
         self._log_update("Download complete!", "success")
         self._log(f"Saved to {self._short_path(self.download_path)}", "dim")
         self._pill("Done")
-        self.dl_btn.config(state="normal")
-        self.fetch_btn.config(state="normal")
+        self.dl_btn.configure(state="normal")
+        self.fetch_btn.configure(state="normal")
         self._refresh_history()
 
     def _on_download_error(self, error):
@@ -922,11 +1014,11 @@ class CanopyApp:
         self._close_dl_log()
         self._log_update(f"Failed: {error[:80]}", "error")
         self._pill("Error")
-        self.dl_btn.config(state="normal")
-        self.fetch_btn.config(state="normal")
+        self.dl_btn.configure(state="normal")
+        self.fetch_btn.configure(state="normal")
         messagebox.showerror("Download Error", error[:300])
 
-    # ── Thumbnails ─────────────────────────────────────────────────────────
+    # ── Thumbnails ────────────────────────────────────────────────────────────
 
     def _fetch_thumb(self, thumb_url, video_id):
         path = os.path.join(THUMB_CACHE, f"{video_id}.jpg")
@@ -948,64 +1040,80 @@ class CanopyApp:
         if not os.path.exists(path):
             return None
         try:
-            img   = Image.open(path).convert("RGB")
-            img   = img.resize((w, h), Image.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
-            self._thumb_refs[video_id] = photo
-            return photo
+            img     = Image.open(path).convert("RGB")
+            img     = img.resize((w, h), Image.LANCZOS)
+            ctk_img = ctk.CTkImage(light_image=img, size=(w, h))
+            self._thumb_refs[video_id] = ctk_img
+            return ctk_img
         except Exception:
             return None
 
-    # ── History rendering ──────────────────────────────────────────────────
+    # ── History rendering ─────────────────────────────────────────────────────
 
     def _refresh_history(self):
-        for w in self.hist_inner.winfo_children():
-            w.destroy()
+        for w in self._history_rows:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self._history_rows = []
 
         n = len(self.history)
-        self.hist_count.config(
+        self.hist_count.configure(
             text=f"{n} item{'s' if n != 1 else ''}" if n else "")
 
         if not self.history:
-            tk.Label(self.hist_inner, text="No downloads yet",
-                     font=FONT_SM, bg=BG, fg=MUTED).pack(pady=24)
+            lbl = ctk.CTkLabel(self.hist_scroll, text="No downloads yet",
+                                font=("Helvetica", 12),
+                                text_color=MUTED,
+                                fg_color="transparent")
+            lbl.pack(pady=24)
+            self._history_rows.append(lbl)
             return
 
         for entry in self.history:
             self._render_row(entry)
 
     def _render_row(self, entry):
-        card = tk.Frame(self.hist_inner, bg=CARD,
-                        highlightbackground=BORDER, highlightthickness=1)
+        card = ctk.CTkFrame(self.hist_scroll, fg_color=CARD,
+                             corner_radius=14,
+                             border_color=BORDER, border_width=1)
         card.pack(fill="x", pady=(0, 8))
+        self._history_rows.append(card)
 
-        inner = tk.Frame(card, bg=CARD)
+        inner = ctk.CTkFrame(card, fg_color=CARD, corner_radius=0)
         inner.pack(fill="x", padx=14, pady=12)
 
-        # Thumbnail
         file_path   = entry.get("file_path", "")
         file_exists = bool(file_path and os.path.isfile(file_path))
 
-        thumb_box = tk.Frame(inner, bg="#c8e6d4",
-                             width=HIST_TW, height=HIST_TH)
+        thumb_box = ctk.CTkFrame(inner, fg_color="#c8e6d4",
+                                  corner_radius=8,
+                                  width=HIST_TW, height=HIST_TH)
         thumb_box.pack(side="left")
         thumb_box.pack_propagate(False)
 
         photo = self._load_thumb(entry.get("video_id", ""))
         if photo:
-            tk.Label(thumb_box, image=photo, bg="#1c1c1e").pack(fill="both", expand=True)
-            thumb_box.config(bg="#1c1c1e")
+            ctk.CTkLabel(thumb_box, image=photo, text="",
+                         fg_color="#1c1c1e",
+                         corner_radius=8).pack(fill="both", expand=True)
+            thumb_box.configure(fg_color="#1c1c1e")
         else:
-            tk.Label(thumb_box, text="▶", font=("Helvetica", 14),
-                     bg="#c8e6d4", fg=ACCENT).pack(expand=True)
+            ctk.CTkLabel(thumb_box, text="▶",
+                         font=("Helvetica", 14),
+                         text_color=ACCENT,
+                         fg_color="transparent").pack(expand=True)
 
-        # Text
-        text_f = tk.Frame(inner, bg=CARD)
+        text_f = ctk.CTkFrame(inner, fg_color=CARD, corner_radius=0)
         text_f.pack(side="left", fill="x", expand=True, padx=(12, 0))
 
         title = entry.get("title", "Unknown")
-        tk.Label(text_f, text=title[:56], font=("Helvetica", 12, "bold"),
-                 bg=CARD, fg=FG, anchor="w").pack(fill="x")
+        ctk.CTkLabel(text_f, text=title[:56],
+                     font=("Helvetica", 12, "bold"),
+                     text_color=FG,
+                     fg_color="transparent",
+                     anchor="w").pack(fill="x")
 
         meta_parts = []
         dt = entry.get("downloaded_at", "")
@@ -1017,42 +1125,53 @@ class CanopyApp:
         if file_path and not file_exists:
             meta_parts.append("⚠ file removed")
 
-        meta_lbl = tk.Label(text_f, text="  ·  ".join(meta_parts),
-                            font=FONT_XS, bg=CARD, anchor="w",
-                            fg="#cc3333" if (file_path and not file_exists) else MUTED)
-        meta_lbl.pack(fill="x", pady=(3, 0))
+        ctk.CTkLabel(text_f,
+                     text="  ·  ".join(meta_parts),
+                     font=("Helvetica", 10),
+                     text_color="#cc3333" if (file_path and not file_exists) else MUTED,
+                     fg_color="transparent",
+                     anchor="w").pack(fill="x", pady=(3, 0))
 
-        # Right side actions
-        right = tk.Frame(inner, bg=CARD)
+        right = ctk.CTkFrame(inner, fg_color=CARD, corner_radius=0)
         right.pack(side="right", padx=(8, 0))
 
         fmt = entry.get("format", "").upper()
         if fmt:
-            tk.Label(right, text=fmt, font=FONT_PILL,
-                     bg=PILL_BG, fg=PILL_FG,
-                     padx=8, pady=2).pack(anchor="e")
+            ctk.CTkLabel(right, text=fmt,
+                         font=("Helvetica", 10, "bold"),
+                         fg_color=PILL_BG,
+                         text_color=PILL_FG,
+                         corner_radius=10,
+                         padx=8, pady=2).pack(anchor="e")
 
         if save_path and os.path.isdir(save_path):
-            tk.Button(right, text="⌁ Finder", font=("Helvetica", 10, "bold"),
-                      bg=CARD, fg=ACCENT, relief="flat", bd=0,
-                      cursor="hand2",
-                      activebackground=CARD, activeforeground="#3d6b4a",
-                      command=lambda p=save_path: os.system(f'open "{p}"')
-                      ).pack(anchor="e", pady=(6, 0))
+            ctk.CTkButton(right, text="⌁ Finder",
+                          font=("Helvetica", 10, "bold"),
+                          fg_color="transparent",
+                          hover_color="#f0ede8",
+                          text_color=ACCENT,
+                          corner_radius=8,
+                          border_width=0,
+                          height=24,
+                          command=lambda p=save_path: os.system(f'open "{p}"')
+                          ).pack(anchor="e", pady=(6, 0))
 
-        menu_btn = tk.Button(right, text="···",
-                             font=("Helvetica", 14, "bold"),
-                             bg=CARD, fg=MUTED, relief="flat", bd=0,
-                             cursor="hand2",
-                             activebackground=CARD, activeforeground=FG)
+        menu_btn = ctk.CTkButton(right, text="···",
+                                  font=("Helvetica", 14, "bold"),
+                                  fg_color="transparent",
+                                  hover_color="#f0ede8",
+                                  text_color=MUTED,
+                                  corner_radius=8,
+                                  border_width=0,
+                                  height=24, width=32)
         menu_btn.pack(anchor="e", pady=(4, 0))
-        menu_btn.config(
+        menu_btn.configure(
             command=lambda e=entry, b=menu_btn: self._show_row_menu(b, e))
 
-    # ── Row context menu ───────────────────────────────────────────────────
+    # ── Row context menu ──────────────────────────────────────────────────────
 
     def _show_row_menu(self, btn, entry):
-        menu = tk.Menu(self.root, tearoff=0, font=FONT_SM,
+        menu = tk.Menu(self.root, tearoff=0, font=("Helvetica", 12),
                        bg=CARD, fg=FG,
                        activebackground=ACCENT, activeforeground="#fff",
                        relief="flat", bd=0)
@@ -1157,7 +1276,7 @@ class CanopyApp:
             self._save_history()
             self._refresh_history()
 
-    # ── Utilities ──────────────────────────────────────────────────────────
+    # ── Utilities ─────────────────────────────────────────────────────────────
 
     def _short_path(self, path):
         home = os.path.expanduser("~")
@@ -1165,7 +1284,7 @@ class CanopyApp:
 
 
 def main():
-    root = tk.Tk()
+    root = ctk.CTk()
     CanopyApp(root)
     root.mainloop()
 

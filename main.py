@@ -20,10 +20,36 @@ THUMB_CACHE  = os.path.expanduser("~/.ytdl_cache/thumbnails")
 LOG_FILE     = os.path.expanduser("~/.ytdl_debug.log")
 DL_LOGS_DIR  = os.path.expanduser("~/.ytdl_cache/logs")
 
+# ── Canopy palette ─────────────────────────────────────────────────────────
+BG       = "#f5f3ee"
+TITLEBAR = "#eeeae2"
+CARD     = "#ffffff"
+BORDER   = "#dedad3"
+ACCENT   = "#4a7c59"
+FG       = "#2a2520"
+MUTED    = "#9e9890"
+DIM      = "#b5b0a8"
+PILL_BG  = "#dff0e6"
+PILL_FG  = "#3b6d45"
+LOG_BG   = "#1a1a18"
+LOG_GRN  = "#4ec97b"
+LOG_MUT  = "#7a7a70"
+LOG_DIM  = "#4a4a42"
+PROG_TRK = "#ece9e3"
+
+FONT_H    = ("Helvetica", 16, "bold")
+FONT_MED  = ("Helvetica", 14, "bold")
+FONT      = ("Helvetica", 13)
+FONT_SM   = ("Helvetica", 12)
+FONT_XS   = ("Helvetica", 10)
+FONT_PILL = ("Helvetica", 10, "bold")
+FONT_MONO = ("Menlo", 10)
+
+THUMB_W, THUMB_H = 88, 56   # video card thumbnail
+HIST_TW, HIST_TH = 68, 44   # history row thumbnail
+
 
 def _find_ffmpeg():
-    """Return ffmpeg path: bundled app → Homebrew → PATH → None."""
-    # PyInstaller bundle unpacks binaries to sys._MEIPASS
     if getattr(sys, "frozen", False):
         bundled = os.path.join(sys._MEIPASS, "ffmpeg")
         if os.path.isfile(bundled):
@@ -39,13 +65,12 @@ FFMPEG_PATH = _find_ffmpeg()
 
 
 class YtdlLogger:
-    """Routes yt-dlp log messages to the session log file."""
     def __init__(self, write_fn):
         self._write = write_fn
 
     def debug(self, msg):
         if msg.startswith("[debug]"):
-            return          # skip verbose debug noise
+            return
         self._write(f"[yt-dlp] {msg}")
 
     def info(self, msg):
@@ -57,44 +82,29 @@ class YtdlLogger:
     def error(self, msg):
         self._write(f"[yt-dlp ERROR] {msg}")
 
-# ── Apple-inspired palette ─────────────────────────────────────────────────
-BG      = "#f5f4f7"
-CARD    = "#ffffff"
-SEP     = "#e5e5ea"
-ACCENT  = "#007aff"
-DL_RED  = "#ff3b30"
-FG      = "#1d1d1f"
-MUTED   = "#6c6c70"
-GREEN   = "#34c759"
-YELLOW  = "#ff9500"
 
-FONT_H   = ("Helvetica", 24, "bold")      # title
-FONT_SUB = ("Helvetica", 12)              # subtitle / labels
-FONT     = ("Helvetica", 13)              # body
-FONT_MED = ("Helvetica", 13, "bold")      # medium emphasis
-FONT_SM  = ("Helvetica", 11)              # small
-FONT_XS  = ("Helvetica", 10)             # caption
-FONT_MONO = ("Menlo", 10)                # icons / log
-
-THUMB_W, THUMB_H = 96, 54
-
-
-class YTDownloaderApp:
+class CanopyApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("YT Downloader")
-        self.root.geometry("700x780")
-        self.root.minsize(640, 600)
+        self.root.title("Canopy")
+        self.root.geometry("580x820")
+        self.root.minsize(580, 600)
+        self.root.resizable(False, True)
         self.root.configure(bg=BG)
 
-        self.download_path  = os.path.expanduser("~/Downloads")
-        self.info           = None
-        self.is_fetching    = False
-        self.is_downloading = False
-        self.activity_open  = True
-        self._thumb_refs    = {}
-        self._dl_log_handle = None   # per-download log file handle
-        self._dl_log_path   = None   # per-download log file path
+        self.download_path       = os.path.expanduser("~/Downloads")
+        self.info                = None
+        self.is_fetching         = False
+        self.is_downloading      = False
+        self.activity_open       = True
+        self._thumb_refs         = {}
+        self._dl_log_handle      = None
+        self._dl_log_path        = None
+        self._last_log_replaceable = False
+        self._download_completed = False
+
+        self.format_var  = tk.StringVar(value="MP4")
+        self.quality_var = tk.StringVar(value="Best")
 
         self.history = self._load_history()
         os.makedirs(THUMB_CACHE, exist_ok=True)
@@ -108,12 +118,10 @@ class YTDownloaderApp:
     def _setup_log(self):
         self._log_file = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
         self._write_log("=" * 60)
-        self._write_log(f"Session started  ffmpeg={FFMPEG_PATH or 'NOT FOUND'}")
-        self._write_log(f"Python={sys.executable}")
+        self._write_log(f"Canopy session started  ffmpeg={FFMPEG_PATH or 'NOT FOUND'}")
 
     def _write_log(self, msg):
-        """Write to the persistent session log and the active per-download log."""
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        ts   = datetime.datetime.now().strftime("%H:%M:%S")
         line = f"[{ts}] {msg}\n"
         try:
             self._log_file.write(line)
@@ -126,19 +134,16 @@ class YTDownloaderApp:
                 pass
 
     def _open_dl_log(self, video_id, title):
-        """Create a fresh per-download .txt log file, return its path."""
         self._close_dl_log()
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe = "".join(c for c in title[:40] if c.isalnum() or c in " -_").strip()
+        ts    = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         fname = f"{ts}_{video_id}.txt"
-        path = os.path.join(DL_LOGS_DIR, fname)
+        path  = os.path.join(DL_LOGS_DIR, fname)
         try:
             self._dl_log_handle = open(path, "w", buffering=1, encoding="utf-8")
             self._dl_log_path   = path
-            # Write header
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._dl_log_handle.write(
-                f"YT Downloader — Process Log\n"
+                f"Canopy — Process Log\n"
                 f"{'=' * 50}\n"
                 f"Date:    {now}\n"
                 f"Video:   {title}\n"
@@ -181,161 +186,287 @@ class YTDownloaderApp:
     # ── UI build ───────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        PAD = 20
+        PAD = 22
 
-        # ── Title ──────────────────────────────────────────────────────────
-        hdr = tk.Frame(self.root, bg=BG)
-        hdr.pack(fill="x", padx=PAD, pady=(28, 0))
-        tk.Label(hdr, text="YT Downloader", font=FONT_H, bg=BG, fg=FG).pack(side="left")
+        # ── Title bar ──────────────────────────────────────────────────────
+        tbar = tk.Frame(self.root, bg=TITLEBAR, height=44)
+        tbar.pack(fill="x")
+        tbar.pack_propagate(False)
+
+        tk.Label(tbar, text="Canopy", font=("Helvetica", 13, "bold"),
+                 bg=TITLEBAR, fg="#6b6560").place(relx=0.5, rely=0.5, anchor="center")
+
+        hist_lnk = tk.Label(tbar, text="History", font=("Helvetica", 12, "bold"),
+                             bg=TITLEBAR, fg=ACCENT, cursor="hand2")
+        hist_lnk.place(relx=1.0, rely=0.5, anchor="e", x=-PAD)
+        hist_lnk.bind("<Button-1>", lambda e: self.hist_canvas.yview_moveto(1.0))
+
+        tk.Frame(self.root, bg=BORDER, height=1).pack(fill="x")
+
+        # ── Body ───────────────────────────────────────────────────────────
+        body = tk.Frame(self.root, bg=BG)
+        body.pack(fill="both", expand=True)
+
+        inner = tk.Frame(body, bg=BG)
+        inner.pack(fill="x", padx=PAD, pady=(20, 0))
+
+        # ── Section label ──────────────────────────────────────────────────
+        tk.Label(inner, text="VIDEO URL", font=("Helvetica", 9, "bold"),
+                 bg=BG, fg=MUTED).pack(anchor="w", pady=(0, 6))
 
         # ── URL card ───────────────────────────────────────────────────────
-        url_card = tk.Frame(self.root, bg=CARD,
-                            highlightbackground=SEP, highlightthickness=1)
-        url_card.pack(fill="x", padx=PAD, pady=(14, 0))
+        url_card = tk.Frame(inner, bg=CARD,
+                            highlightbackground=BORDER, highlightthickness=1)
+        url_card.pack(fill="x", pady=(0, 10))
 
-        url_inner = tk.Frame(url_card, bg=CARD)
-        url_inner.pack(fill="x", padx=16, pady=14)
+        url_row = tk.Frame(url_card, bg=CARD)
+        url_row.pack(fill="x", padx=14, pady=12)
 
-        tk.Label(url_inner, text="URL", font=FONT_XS,
-                 bg=CARD, fg=MUTED).pack(anchor="w")
-
-        url_row = tk.Frame(url_inner, bg=CARD)
-        url_row.pack(fill="x", pady=(5, 0))
+        tk.Label(url_row, text="⌁", font=("Helvetica", 16),
+                 bg=CARD, fg=DIM).pack(side="left")
 
         self.url_var = tk.StringVar()
         self.url_entry = tk.Entry(url_row, textvariable=self.url_var,
-                                  font=FONT, bg=BG, fg=FG,
+                                  font=FONT, bg=CARD, fg=FG,
                                   insertbackground=FG, relief="flat", bd=0,
-                                  highlightthickness=1,
-                                  highlightbackground=SEP,
-                                  highlightcolor=ACCENT)
-        self.url_entry.pack(side="left", fill="x", expand=True, ipady=8, ipadx=8)
+                                  highlightthickness=0)
+        self.url_entry.pack(side="left", fill="x", expand=True, ipady=2, padx=(8, 0))
         self.url_entry.bind("<Return>", lambda e: self._fetch_info())
 
-        self.fetch_btn = tk.Button(url_row, text="Fetch", font=("Helvetica", 12, "bold"),
+        self.fetch_btn = tk.Button(url_row, text="Fetch",
+                                   font=("Helvetica", 12, "bold"),
                                    bg=ACCENT, fg="#fff", relief="flat", bd=0,
-                                   activebackground="#0051d5",
+                                   activebackground="#3d6b4a",
                                    activeforeground="#fff",
                                    cursor="hand2",
                                    command=self._fetch_info)
-        self.fetch_btn.pack(side="left", padx=(8, 0), ipady=8, ipadx=16)
+        self.fetch_btn.pack(side="left", padx=(10, 0), ipady=6, ipadx=14)
 
-        # video info strip
-        tk.Frame(url_card, bg=SEP, height=1).pack(fill="x")
-        info_inner = tk.Frame(url_card, bg=CARD)
-        info_inner.pack(fill="x", padx=16, pady=10)
-        self.title_label = tk.Label(info_inner, text="Paste a YouTube URL above",
-                                    font=("Helvetica", 12), bg=CARD, fg=MUTED,
-                                    anchor="w", wraplength=630, justify="left")
-        self.title_label.pack(fill="x")
+        # ── Video info card ────────────────────────────────────────────────
+        self.video_card = tk.Frame(inner, bg=CARD,
+                                   highlightbackground=BORDER, highlightthickness=1)
+        self.video_card.pack(fill="x", pady=(0, 10))
+
+        vc_inner = tk.Frame(self.video_card, bg=CARD)
+        vc_inner.pack(fill="x", padx=14, pady=12)
+
+        # Thumbnail
+        self.vc_thumb_box = tk.Frame(vc_inner, bg="#c8e6d4",
+                                     width=THUMB_W, height=THUMB_H)
+        self.vc_thumb_box.pack(side="left")
+        self.vc_thumb_box.pack_propagate(False)
+        self.vc_thumb_lbl = tk.Label(self.vc_thumb_box, text="▶",
+                                     font=("Helvetica", 18),
+                                     bg="#c8e6d4", fg="#4a7c59")
+        self.vc_thumb_lbl.pack(expand=True)
+        self._vc_photo = None
+
+        # Info
+        vc_info = tk.Frame(vc_inner, bg=CARD)
+        vc_info.pack(side="left", fill="x", expand=True, padx=(12, 0))
+
+        self.vc_title = tk.Label(vc_info, text="Paste a YouTube URL to get started",
+                                 font=("Helvetica", 12, "bold"),
+                                 bg=CARD, fg=MUTED, anchor="w",
+                                 wraplength=340, justify="left")
+        self.vc_title.pack(fill="x")
+
+        self.vc_meta = tk.Label(vc_info, text="",
+                                font=FONT_XS, bg=CARD, fg=MUTED, anchor="w")
+        self.vc_meta.pack(fill="x", pady=(3, 0))
+
+        pill_row = tk.Frame(vc_info, bg=CARD)
+        pill_row.pack(fill="x", pady=(7, 0))
+        self.vc_fmt_pill  = tk.Label(pill_row, text="MP4",
+                                     font=FONT_PILL, bg=PILL_BG, fg=PILL_FG,
+                                     padx=8, pady=2)
+        self.vc_fmt_pill.pack(side="left")
+        self.vc_qual_pill = tk.Label(pill_row, text="Best",
+                                     font=FONT_PILL, bg="#e8ede6", fg="#5a7060",
+                                     padx=8, pady=2)
+        self.vc_qual_pill.pack(side="left", padx=(6, 0))
 
         # ── Options row ────────────────────────────────────────────────────
-        opts = tk.Frame(self.root, bg=BG)
-        opts.pack(fill="x", padx=PAD, pady=(14, 0))
+        opts_row = tk.Frame(inner, bg=BG)
+        opts_row.pack(fill="x", pady=(0, 10))
 
-        def _labeled_combo(parent, label, var, values, width):
-            f = tk.Frame(parent, bg=BG)
-            f.pack(side="left")
-            tk.Label(f, text=label, font=FONT_XS, bg=BG, fg=MUTED).pack(anchor="w")
-            cb = ttk.Combobox(f, textvariable=var, values=values,
-                              state="readonly", width=width, font=FONT_SM)
-            cb.pack(pady=(4, 0))
-            return f
+        self._opt_fmt  = self._option_card(opts_row, "FORMAT",  self.format_var,
+                                           ["MP4", "MP3", "M4A", "WEBM"])
+        self._opt_fmt.pack(side="left", fill="x", expand=True)
 
-        self.format_var  = tk.StringVar(value="mp4")
-        self.quality_var = tk.StringVar(value="Best")
-        _labeled_combo(opts, "Format",  self.format_var,
-                       ["mp4", "mp3", "webm", "m4a"], 9)
-        tk.Frame(opts, bg=BG, width=12).pack(side="left")
-        _labeled_combo(opts, "Quality", self.quality_var,
-                       ["Best", "1080p", "720p", "480p", "360p"], 11)
+        tk.Frame(opts_row, bg=BG, width=8).pack(side="left")
 
-        folder_f = tk.Frame(opts, bg=BG)
-        folder_f.pack(side="left", padx=(12, 0))
-        tk.Label(folder_f, text="Save to", font=FONT_XS, bg=BG, fg=MUTED).pack(anchor="w")
-        self.folder_label = tk.Label(folder_f,
+        self._opt_qual = self._option_card(opts_row, "QUALITY", self.quality_var,
+                                           ["Best", "1080p", "720p", "480p", "360p"])
+        self._opt_qual.pack(side="left", fill="x", expand=True)
+
+        tk.Frame(opts_row, bg=BG, width=8).pack(side="left")
+
+        save_card = tk.Frame(opts_row, bg=CARD,
+                             highlightbackground=BORDER, highlightthickness=1,
+                             cursor="hand2")
+        save_card.pack(side="left", fill="x", expand=True)
+        tk.Label(save_card, text="SAVE TO", font=("Helvetica", 9, "bold"),
+                 bg=CARD, fg=MUTED).pack(anchor="w", padx=12, pady=(10, 0))
+        save_val = tk.Frame(save_card, bg=CARD)
+        save_val.pack(fill="x", padx=12, pady=(2, 10))
+        self.folder_label = tk.Label(save_val,
                                      text=self._short_path(self.download_path),
-                                     font=FONT_SM, bg=BG, fg=ACCENT, cursor="hand2")
-        self.folder_label.pack(pady=(4, 0), anchor="w")
-        self.folder_label.bind("<Button-1>", lambda e: self._pick_folder())
+                                     font=("Helvetica", 12, "bold"),
+                                     bg=CARD, fg=ACCENT, anchor="w")
+        self.folder_label.pack(side="left")
+        tk.Label(save_val, text="▾", font=FONT_XS, bg=CARD, fg=DIM).pack(side="left", padx=(4, 0))
+        save_card.bind("<Button-1>", lambda e: self._pick_folder())
+        for w in save_card.winfo_children():
+            w.bind("<Button-1>", lambda e: self._pick_folder())
 
-        self.dl_btn = tk.Button(opts, text="Download",
-                                font=("Helvetica", 14, "bold"),
-                                bg=DL_RED, fg="#fff", relief="flat", bd=0,
-                                activebackground="#c0392b",
+        # Update pills when format/quality change
+        self.format_var.trace_add("write",  lambda *_: self._sync_pills())
+        self.quality_var.trace_add("write", lambda *_: self._sync_pills())
+
+        # ── Progress card ──────────────────────────────────────────────────
+        self._build_progress_card(inner)
+
+        # ── Download button ────────────────────────────────────────────────
+        self.dl_btn = tk.Button(inner, text="Download",
+                                font=("Helvetica", 15, "bold"),
+                                bg=ACCENT, fg="#fff", relief="flat", bd=0,
+                                activebackground="#3d6b4a",
                                 activeforeground="#fff",
                                 cursor="hand2", state="disabled",
                                 command=self._start_download)
-        self.dl_btn.pack(side="right", ipady=9, ipadx=22)
+        self.dl_btn.pack(fill="x", pady=(0, 20), ipady=13)
 
-        # ── Activity panel ─────────────────────────────────────────────────
-        self._build_activity_panel(PAD)
+        # ── Divider ────────────────────────────────────────────────────────
+        tk.Frame(self.root, bg=BORDER, height=1).pack(fill="x",
+                                                       padx=0, pady=(0, 0))
 
         # ── History section ────────────────────────────────────────────────
         self._build_history_section(PAD)
 
-        # ── TTK styling ────────────────────────────────────────────────────
+        # ── TTK style ──────────────────────────────────────────────────────
         style = ttk.Style()
         style.theme_use("default")
-        style.configure("TCombobox",
-                        fieldbackground=CARD, background=CARD,
-                        foreground=FG, selectbackground=CARD,
-                        selectforeground=FG, arrowcolor=MUTED)
-        style.configure("Act.Horizontal.TProgressbar",
-                        troughcolor=SEP, background=ACCENT, thickness=4)
+        style.configure("Canopy.Horizontal.TProgressbar",
+                        troughcolor=PROG_TRK, background=ACCENT,
+                        thickness=5, borderwidth=0, relief="flat")
+        style.configure("TScrollbar", background=BG, troughcolor=BG,
+                        borderwidth=0, relief="flat")
 
-    def _build_activity_panel(self, PAD):
-        outer = tk.Frame(self.root, bg=BG)
-        outer.pack(fill="x", padx=PAD, pady=(14, 0))
+    def _option_card(self, parent, label, var, choices):
+        card = tk.Frame(parent, bg=CARD,
+                        highlightbackground=BORDER, highlightthickness=1,
+                        cursor="hand2")
+        tk.Label(card, text=label, font=("Helvetica", 9, "bold"),
+                 bg=CARD, fg=MUTED).pack(anchor="w", padx=12, pady=(10, 0))
+        val_row = tk.Frame(card, bg=CARD)
+        val_row.pack(fill="x", padx=12, pady=(2, 10))
+        val_lbl = tk.Label(val_row, textvariable=var,
+                           font=("Helvetica", 14, "bold"),
+                           bg=CARD, fg=FG, anchor="w")
+        val_lbl.pack(side="left")
+        tk.Label(val_row, text="▾", font=FONT_XS, bg=CARD, fg=DIM).pack(
+            side="left", padx=(4, 0))
 
-        # Header (always visible)
-        hdr_card = tk.Frame(outer, bg=CARD,
-                            highlightbackground=SEP, highlightthickness=1)
-        hdr_card.pack(fill="x")
-        hdr_inner = tk.Frame(hdr_card, bg=CARD)
-        hdr_inner.pack(fill="x", padx=16, pady=10)
+        def show_menu(e=None):
+            m = tk.Menu(card, tearoff=0, font=FONT_SM,
+                        bg=CARD, fg=FG,
+                        activebackground=ACCENT, activeforeground="#fff")
+            for c in choices:
+                m.add_command(label=c, command=lambda v=c: var.set(v))
+            try:
+                m.tk_popup(card.winfo_rootx(),
+                           card.winfo_rooty() + card.winfo_height())
+            finally:
+                m.grab_release()
 
-        self.act_toggle = tk.Label(hdr_inner, text="▾  Activity",
-                                   font=("Helvetica", 12, "bold"),
-                                   bg=CARD, fg=FG, cursor="hand2")
-        self.act_toggle.pack(side="left")
-        self.act_toggle.bind("<Button-1>", lambda e: self._toggle_activity())
+        card.bind("<Button-1>", show_menu)
+        val_row.bind("<Button-1>", show_menu)
+        val_lbl.bind("<Button-1>", show_menu)
+        return card
 
-        self.act_pill = tk.Label(hdr_inner, text="Idle",
-                                 font=FONT_XS, bg=SEP, fg=MUTED,
-                                 padx=8, pady=2)
-        self.act_pill.pack(side="left", padx=(10, 0))
+    def _sync_pills(self):
+        fmt = self.format_var.get()
+        qual = self.quality_var.get()
+        self.vc_fmt_pill.config(text=fmt.upper())
+        self.vc_qual_pill.config(text=qual)
 
-        # Body (collapsible)
-        self.act_body = tk.Frame(outer, bg=CARD,
-                                 highlightbackground=SEP, highlightthickness=1)
-        self.act_body.pack(fill="x")
+    def _build_progress_card(self, parent):
+        self.prog_card = tk.Frame(parent, bg=CARD,
+                                  highlightbackground=BORDER, highlightthickness=1)
+        self.prog_card.pack(fill="x", pady=(0, 10))
 
-        tk.Frame(self.act_body, bg=SEP, height=1).pack(fill="x")
+        pc = tk.Frame(self.prog_card, bg=CARD)
+        pc.pack(fill="x", padx=14, pady=(12, 8))
 
-        self.act_log = tk.Frame(self.act_body, bg=CARD)
-        self.act_log.pack(fill="x", padx=16, pady=(10, 6))
+        # Status row
+        status_row = tk.Frame(pc, bg=CARD)
+        status_row.pack(fill="x")
+        self.prog_status = tk.Label(status_row, text="Ready",
+                                    font=("Helvetica", 12, "bold"),
+                                    bg=CARD, fg=ACCENT, anchor="w")
+        self.prog_status.pack(side="left")
+        self.prog_detail = tk.Label(status_row, text="",
+                                    font=FONT_XS, bg=CARD, fg=MUTED, anchor="e")
+        self.prog_detail.pack(side="right")
 
+        # Progress bar
         self.act_progress_var = tk.DoubleVar()
-        self.act_bar = ttk.Progressbar(self.act_body,
-                                       variable=self.act_progress_var,
+        self.act_bar = ttk.Progressbar(pc, variable=self.act_progress_var,
                                        maximum=100,
-                                       style="Act.Horizontal.TProgressbar")
-        # bar hidden until download starts
+                                       style="Canopy.Horizontal.TProgressbar")
+        self.act_bar.pack(fill="x", pady=(8, 0))
 
-        self._log("Waiting for a URL...", "muted")
+        # Log toggle
+        tog_row = tk.Frame(pc, bg=CARD, cursor="hand2")
+        tog_row.pack(fill="x", pady=(8, 0))
+        self.log_chevron = tk.Label(tog_row, text="▾", font=("Helvetica", 10),
+                                    bg=CARD, fg=DIM, cursor="hand2")
+        self.log_chevron.pack(side="left")
+        tk.Label(tog_row, text="  Activity log", font=FONT_XS,
+                 bg=CARD, fg=MUTED, cursor="hand2").pack(side="left")
+        tog_row.bind("<Button-1>",      lambda e: self._toggle_activity())
+        self.log_chevron.bind("<Button-1>", lambda e: self._toggle_activity())
+        for w in tog_row.winfo_children():
+            w.bind("<Button-1>", lambda e: self._toggle_activity())
+
+        # Dark terminal log
+        self.log_body = tk.Frame(pc, bg=CARD)
+        self.log_body.pack(fill="x", pady=(6, 0))
+
+        log_bg_frame = tk.Frame(self.log_body, bg=LOG_BG)
+        log_bg_frame.pack(fill="x")
+
+        self._log_text = tk.Text(log_bg_frame, bg=LOG_BG, fg=LOG_MUT,
+                                 font=FONT_MONO, height=6,
+                                 relief="flat", bd=0,
+                                 state="disabled", wrap="char",
+                                 padx=12, pady=10,
+                                 highlightthickness=0,
+                                 insertbackground=LOG_GRN,
+                                 selectbackground=ACCENT)
+        self._log_text.pack(fill="x")
+        self._log_text.tag_config("ts",      foreground="#5a5a50")
+        self._log_text.tag_config("green",   foreground=LOG_GRN)
+        self._log_text.tag_config("muted",   foreground=LOG_MUT)
+        self._log_text.tag_config("dim",     foreground=LOG_DIM)
+        self._log_text.tag_config("active",  foreground=LOG_GRN)
+        self._log_text.tag_config("success", foreground=LOG_GRN)
+        self._log_text.tag_config("error",   foreground="#ff6b6b")
+        self._log_text.tag_config("warn",    foreground="#f5a623")
+
+        self._log("Waiting for a URL...", "dim")
 
     def _build_history_section(self, PAD):
         hist_hdr = tk.Frame(self.root, bg=BG)
-        hist_hdr.pack(fill="x", padx=PAD, pady=(20, 6))
+        hist_hdr.pack(fill="x", padx=PAD, pady=(16, 10))
         tk.Label(hist_hdr, text="Recent Downloads",
-                 font=("Helvetica", 14, "bold"),
-                 bg=BG, fg=FG).pack(side="left")
+                 font=FONT_H, bg=BG, fg=FG).pack(side="left")
         self.hist_count = tk.Label(hist_hdr, text="", font=FONT_XS, bg=BG, fg=MUTED)
         self.hist_count.pack(side="left", padx=(8, 0))
 
         container = tk.Frame(self.root, bg=BG)
-        container.pack(fill="both", expand=True, padx=PAD, pady=(0, 20))
+        container.pack(fill="both", expand=True, padx=PAD, pady=(0, 24))
 
         self.hist_canvas = tk.Canvas(container, bg=BG, highlightthickness=0)
         sb = ttk.Scrollbar(container, orient="vertical",
@@ -350,55 +481,58 @@ class YTDownloaderApp:
         self.hist_canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        # mouse-wheel scroll
-        self.hist_canvas.bind_all("<MouseWheel>",
+        self.hist_canvas.bind_all(
+            "<MouseWheel>",
             lambda e: self.hist_canvas.yview_scroll(-1 * (e.delta // 120), "units"))
 
-    # ── Activity helpers ───────────────────────────────────────────────────
-
-    _ICON = {
-        "muted":   ("·",  MUTED),
-        "active":  ("⟳",  ACCENT),
-        "success": ("✓",  GREEN),
-        "error":   ("✗",  DL_RED),
-        "warn":    ("!",  YELLOW),
-    }
+    # ── Activity log helpers ───────────────────────────────────────────────
 
     def _log(self, text, kind="muted"):
-        icon, color = self._ICON.get(kind, ("·", MUTED))
-        row = tk.Frame(self.act_log, bg=CARD)
-        row.pack(fill="x", pady=1)
-        tk.Label(row, text=icon, font=FONT_MONO, bg=CARD, fg=color, width=2,
-                 anchor="w").pack(side="left")
-        tk.Label(row, text=text, font=FONT_XS, bg=CARD, fg=color,
-                 anchor="w").pack(side="left", fill="x", expand=True)
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        self._log_text.config(state="normal")
+        self._log_text.insert("end", f"{ts}  ", "ts")
+        self._log_text.insert("end", f"{text}\n", kind)
+        self._log_text.config(state="disabled")
+        self._log_text.see("end")
+        self._last_log_replaceable = False
 
     def _log_update(self, text, kind="active"):
-        rows = self.act_log.winfo_children()
-        if not rows:
-            self._log(text, kind)
-            return
-        icon, color = self._ICON.get(kind, ("·", MUTED))
-        widgets = rows[-1].winfo_children()
-        if len(widgets) >= 2:
-            widgets[0].config(text=icon, fg=color)
-            widgets[1].config(text=text, fg=color)
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        self._log_text.config(state="normal")
+        if self._last_log_replaceable:
+            self._log_text.delete("end-2l linestart", "end-1l linestart")
+        self._log_text.insert("end", f"{ts}  {text}\n", kind)
+        self._log_text.config(state="disabled")
+        self._log_text.see("end")
+        self._last_log_replaceable = True
 
     def _log_clear(self):
-        for w in self.act_log.winfo_children():
-            w.destroy()
+        self._log_text.config(state="normal")
+        self._log_text.delete("1.0", "end")
+        self._log_text.config(state="disabled")
+        self._last_log_replaceable = False
 
-    def _pill(self, text, bg=SEP, fg=MUTED):
-        self.act_pill.config(text=text, bg=bg, fg=fg)
+    def _pill(self, text, bg=None, fg=None):
+        """Update the progress status label (replaces the old pill badge)."""
+        color_map = {
+            "Idle":        (MUTED, CARD),
+            "Fetching":    (ACCENT, CARD),
+            "Ready":       (ACCENT, CARD),
+            "Downloading": (ACCENT, CARD),
+            "Done":        (ACCENT, CARD),
+            "Error":       ("#cc3333", CARD),
+        }
+        color = color_map.get(text, (MUTED, CARD))[0]
+        self.prog_status.config(text=text, fg=color)
 
     def _toggle_activity(self):
         self.activity_open = not self.activity_open
         if self.activity_open:
-            self.act_body.pack(fill="x")
-            self.act_toggle.config(text="▾  Activity")
+            self.log_body.pack(fill="x", pady=(6, 0))
+            self.log_chevron.config(text="▾")
         else:
-            self.act_body.pack_forget()
-            self.act_toggle.config(text="▸  Activity")
+            self.log_body.pack_forget()
+            self.log_chevron.config(text="▸")
 
     # ── Actions ────────────────────────────────────────────────────────────
 
@@ -415,12 +549,13 @@ class YTDownloaderApp:
         self.is_fetching = True
         self.fetch_btn.config(state="disabled")
         self.dl_btn.config(state="disabled")
-        self.title_label.config(text="Fetching video info...", fg=MUTED)
+        self.vc_title.config(text="Fetching video info...", fg=MUTED)
+        self.vc_meta.config(text="")
         self._log_clear()
-        self._log("Connecting to YouTube...", "active")
-        self._pill("Fetching", bg="#e5f0ff", fg=ACCENT)
+        self._log(f"Fetching: {url[:60]}", "green")
+        self._pill("Fetching")
         self.act_progress_var.set(0)
-        self.act_bar.pack_forget()
+        self.prog_detail.config(text="")
         threading.Thread(target=self._do_fetch, args=(url,), daemon=True).start()
 
     def _do_fetch(self, url):
@@ -432,34 +567,65 @@ class YTDownloaderApp:
             title    = self.info.get("title", "Unknown")
             uploader = self.info.get("uploader", "")
             duration = self.info.get("duration_string", "")
-            self._write_log(f"Info OK  title={title!r}  uploader={uploader!r}  duration={duration!r}")
-            parts   = [p for p in (title, uploader, duration) if p]
-            display = "  ·  ".join(parts)
-            self.root.after(0, lambda: self._on_fetch_done(display, title, True))
+            thumb_url = self.info.get("thumbnail", "")
+            video_id  = self.info.get("id", "")
+            self._write_log(f"Info OK  title={title!r}")
+            parts   = [p for p in (uploader, duration) if p]
+            meta    = "  ·  ".join(parts)
+            self.root.after(0, lambda: self._on_fetch_done(title, meta, thumb_url, video_id, True))
         except Exception as e:
             self._write_log(f"Fetch error: {e}")
-            self.root.after(0, lambda: self._on_fetch_done(str(e), "", False))
+            self.root.after(0, lambda: self._on_fetch_done(str(e), "", "", "", False))
 
-    def _on_fetch_done(self, display, title, success):
+    def _on_fetch_done(self, title, meta, thumb_url, video_id, success):
         self.is_fetching = False
         self.fetch_btn.config(state="normal")
         if success:
-            self.title_label.config(text=display, fg=FG)
+            self.vc_title.config(text=title, fg=FG)
+            self.vc_meta.config(text=meta)
             self.dl_btn.config(state="normal")
-            self._log_update(f"Ready — {title[:55]}", "success")
-            self._pill("Ready", bg="#e6f9ee", fg=GREEN)
+            self._log(f"Found: {title[:55]}", "muted")
+            if meta:
+                self._log(meta, "dim")
+            self._pill("Ready")
+            if thumb_url and video_id:
+                threading.Thread(target=self._load_vc_thumb,
+                                 args=(thumb_url, video_id), daemon=True).start()
         else:
-            self.title_label.config(text="Could not fetch video info", fg=DL_RED)
-            self._log_update(f"Error: {display[:80]}", "error")
-            self._pill("Error", bg="#fdecea", fg=DL_RED)
+            self.vc_title.config(text="Could not fetch video info", fg="#cc3333")
+            self._log(f"Error: {title[:80]}", "error")
+            self._pill("Error")
+
+    def _load_vc_thumb(self, thumb_url, video_id):
+        cached = os.path.join(THUMB_CACHE, f"{video_id}.jpg")
+        if not os.path.exists(cached):
+            try:
+                req = urllib.request.Request(
+                    thumb_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    with open(cached, "wb") as f:
+                        f.write(r.read())
+            except Exception:
+                return
+        if PILLOW and os.path.exists(cached):
+            try:
+                img   = Image.open(cached).convert("RGB")
+                img   = img.resize((THUMB_W, THUMB_H), Image.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                def _apply():
+                    self._vc_photo = photo
+                    self.vc_thumb_lbl.config(image=photo, text="", bg="#1c1c1e")
+                    self.vc_thumb_box.config(bg="#1c1c1e")
+                self.root.after(0, _apply)
+            except Exception:
+                pass
 
     def _start_download(self):
         if not self.info:
             return
         if self.is_downloading:
-            messagebox.showwarning(
-                "Download In Progress",
-                "A download is already running. Please wait for it to finish.")
+            messagebox.showwarning("Download In Progress",
+                                   "A download is already running. Please wait.")
             return
         self._show_download_picker()
 
@@ -469,11 +635,10 @@ class YTDownloaderApp:
         title     = self.info.get("title", "Unknown")
         uploader  = self.info.get("uploader", "")
         duration  = self.info.get("duration_string", "")
-        thumb_url = self.info.get("thumbnail", "")
         video_id  = self.info.get("id", "")
 
         DIALOG_W = 400
-        THUMB_H  = 225   # 16:9
+        THUMB_DH = 225
 
         dlg = tk.Toplevel(self.root)
         dlg.title("")
@@ -482,58 +647,46 @@ class YTDownloaderApp:
         dlg.transient(self.root)
         dlg.grab_set()
 
-        # ── Thumbnail ──────────────────────────────────────────────────────
-        thumb_bg = tk.Frame(dlg, bg="#1c1c1e", width=DIALOG_W, height=THUMB_H)
+        # Thumbnail
+        thumb_bg = tk.Frame(dlg, bg="#c8e6d4", width=DIALOG_W, height=THUMB_DH)
         thumb_bg.pack(fill="x")
         thumb_bg.pack_propagate(False)
-        thumb_lbl = tk.Label(thumb_bg, bg="#1c1c1e", text="▶",
-                             font=("Helvetica", 40), fg="#3a3a3c")
+        thumb_lbl = tk.Label(thumb_bg, bg="#c8e6d4", text="▶",
+                             font=("Helvetica", 40), fg=ACCENT)
         thumb_lbl.pack(expand=True)
-        dlg._photo = None  # prevent GC
+        dlg._photo = None
 
-        def _load_thumb():
+        def _load():
             cached = os.path.join(THUMB_CACHE, f"{video_id}.jpg") if video_id else ""
-            if cached and not os.path.exists(cached) and thumb_url:
-                try:
-                    req = urllib.request.Request(
-                        thumb_url, headers={"User-Agent": "Mozilla/5.0"})
-                    with urllib.request.urlopen(req, timeout=10) as r:
-                        with open(cached, "wb") as f:
-                            f.write(r.read())
-                except Exception:
-                    return
             if cached and os.path.exists(cached) and PILLOW:
                 try:
                     img   = Image.open(cached).convert("RGB")
-                    img   = img.resize((DIALOG_W, THUMB_H), Image.LANCZOS)
+                    img   = img.resize((DIALOG_W, THUMB_DH), Image.LANCZOS)
                     photo = ImageTk.PhotoImage(img)
                     def _apply():
                         if dlg.winfo_exists():
-                            thumb_lbl.config(image=photo, text="")
+                            thumb_lbl.config(image=photo, text="", bg="#1c1c1e")
+                            thumb_bg.config(bg="#1c1c1e")
                             dlg._photo = photo
                     dlg.after(0, _apply)
                 except Exception:
                     pass
 
-        if thumb_url:
-            threading.Thread(target=_load_thumb, daemon=True).start()
+        threading.Thread(target=_load, daemon=True).start()
 
-        # ── Video info ─────────────────────────────────────────────────────
+        # Info
         info_f = tk.Frame(dlg, bg=CARD)
         info_f.pack(fill="x", padx=20, pady=(16, 12))
-
         tk.Label(info_f, text=title, font=("Helvetica", 13, "bold"),
                  bg=CARD, fg=FG, anchor="w",
                  wraplength=360, justify="left").pack(fill="x")
-
         detail = "  ·  ".join(p for p in (uploader, duration) if p)
         if detail:
             tk.Label(info_f, text=detail, font=FONT_XS,
                      bg=CARD, fg=MUTED, anchor="w").pack(fill="x", pady=(5, 0))
 
-        tk.Frame(dlg, bg=SEP, height=1).pack(fill="x")
+        tk.Frame(dlg, bg=BORDER, height=1).pack(fill="x")
 
-        # ── Quality rows ───────────────────────────────────────────────────
         options = [
             ("1080p HD",    "mp4", "1080p", "▶", "Best quality  ·  H.264  ·  MP4"),
             ("720p",        "mp4", "720p",  "▶", "High definition  ·  H.264  ·  MP4"),
@@ -544,39 +697,33 @@ class YTDownloaderApp:
         for opt_label, fmt, quality, icon, sub in options:
             def _pick(f=fmt, q=quality):
                 dlg.destroy()
+                self.format_var.set(f.upper())
+                self.quality_var.set(q)
                 self._begin_download(f, q)
 
             row = tk.Frame(dlg, bg=CARD, cursor="hand2")
             row.pack(fill="x")
-
             pad = tk.Frame(row, bg=CARD)
             pad.pack(fill="x", padx=20, pady=13)
-
             tk.Label(pad, text=icon, font=("Helvetica", 16),
                      bg=CARD, fg=ACCENT, width=2).pack(side="left")
-
             col = tk.Frame(pad, bg=CARD)
             col.pack(side="left", padx=(12, 0), fill="x", expand=True)
             tk.Label(col, text=opt_label, font=("Helvetica", 13, "bold"),
                      bg=CARD, fg=FG, anchor="w").pack(anchor="w")
             tk.Label(col, text=sub, font=FONT_XS,
                      bg=CARD, fg=MUTED, anchor="w").pack(anchor="w", pady=(2, 0))
-
             tk.Label(pad, text="›", font=("Helvetica", 20),
-                     bg=CARD, fg="#c7c7cc").pack(side="right")
-
-            tk.Frame(dlg, bg=SEP, height=1).pack(fill="x")
-
+                     bg=CARD, fg=DIM).pack(side="right")
+            tk.Frame(dlg, bg=BORDER, height=1).pack(fill="x")
             self._bind_picker_row(row, _pick)
 
-        # ── Cancel ─────────────────────────────────────────────────────────
-        tk.Button(dlg, text="Cancel", font=("Helvetica", 12),
+        tk.Button(dlg, text="Cancel", font=FONT_SM,
                   bg=CARD, fg=MUTED, relief="flat", bd=0,
                   cursor="hand2", pady=13,
                   activebackground=CARD, activeforeground=FG,
                   command=dlg.destroy).pack(fill="x")
 
-        # ── Center over parent ──────────────────────────────────────────────
         dlg.update_idletasks()
         dh = dlg.winfo_reqheight()
         x  = self.root.winfo_x() + (self.root.winfo_width()  - DIALOG_W) // 2
@@ -584,7 +731,6 @@ class YTDownloaderApp:
         dlg.geometry(f"{DIALOG_W}x{dh}+{x}+{y}")
 
     def _bind_picker_row(self, widget, cmd):
-        """Recursively bind click and hover highlight to a picker row."""
         widget.bind("<Button-1>", lambda e: cmd())
         widget.bind("<Enter>",    lambda e: self._row_bg(widget, BG))
         widget.bind("<Leave>",    lambda e: self._row_bg(widget, CARD))
@@ -600,7 +746,6 @@ class YTDownloaderApp:
             self._row_bg(child, color)
 
     def _begin_download(self, fmt, quality):
-        """Kick off a download with the chosen format/quality."""
         if not self.info or self.is_downloading:
             return
         url      = self.url_var.get().strip()
@@ -612,16 +757,18 @@ class YTDownloaderApp:
         self.dl_btn.config(state="disabled")
         self.fetch_btn.config(state="disabled")
         self.act_progress_var.set(0)
-        self.act_bar.pack(fill="x", padx=16, pady=(0, 10))
-        self._log(f"Starting {fmt.upper()} {quality} download...", "active")
-        self._pill("Downloading", bg="#e5f0ff", fg=ACCENT)
+        self.prog_detail.config(text="")
+        self._log(f"Starting {fmt.upper()} {quality} download...", "green")
+        self._pill("Downloading")
         threading.Thread(target=self._do_download,
                          args=(url, fmt, quality), daemon=True).start()
+
+    # ── Download logic (unchanged) ─────────────────────────────────────────
 
     def _do_download(self, url, fmt, quality):
         self._write_log(f"Download start  url={url}  fmt={fmt}  quality={quality}")
         self._write_log(f"Save path: {self.download_path}")
-        self._write_log(f"ffmpeg: {FFMPEG_PATH or 'NOT FOUND — merging will fail'}")
+        self._write_log(f"ffmpeg: {FFMPEG_PATH or 'NOT FOUND'}")
         self._last_filename = None
 
         try:
@@ -636,8 +783,6 @@ class YTDownloaderApp:
             else:
                 h_map = {"1080p": 1080, "720p": 720, "480p": 480, "360p": 360}
                 if fmt == "mp4":
-                    # Prefer H.264 + AAC so the file plays in QuickTime natively.
-                    # Falls back to any mp4-compatible stream if h264 isn't available.
                     if quality in h_map:
                         h = h_map[quality]
                         ydl_fmt = (
@@ -682,9 +827,6 @@ class YTDownloaderApp:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
 
-            # Postprocessor hook may have updated _last_filename to the final
-            # output (e.g. .mp3 after ffmpeg converts from .webm).  If not,
-            # try swapping the extension to the requested format as a fallback.
             if self._last_filename and not os.path.isfile(self._last_filename):
                 swapped = os.path.splitext(self._last_filename)[0] + f".{fmt}"
                 if os.path.isfile(swapped):
@@ -694,8 +836,6 @@ class YTDownloaderApp:
             if self._last_filename:
                 exists = os.path.isfile(self._last_filename)
                 self._write_log(f"Final file: {self._last_filename}  exists={exists}")
-                if not exists:
-                    self._write_log("WARNING: file not found at resolved path!")
             else:
                 self._write_log("WARNING: no filename captured")
 
@@ -738,8 +878,8 @@ class YTDownloaderApp:
             parts      = [f"{pct:.0f}%"]
             if speed: parts.append(speed)
             if eta:   parts.append(f"ETA {eta}")
-            label = "Downloading  " + "  ·  ".join(parts)
-            self.root.after(0, lambda p=pct, s=label: self._set_progress(p, s))
+            detail = "  ·  ".join(parts)
+            self.root.after(0, lambda p=pct, s=detail: self._set_progress(p, s))
         elif d["status"] == "finished":
             fname = d.get("filename", "")
             if fname:
@@ -748,19 +888,17 @@ class YTDownloaderApp:
             self.root.after(0, lambda: self._set_progress(95, "Processing..."))
 
     def _postprocessor_hook(self, d):
-        """Called by yt-dlp after each postprocessor (e.g. FFmpegExtractAudio).
-        Captures the true final output path so history stores the right file."""
         if d.get("status") == "finished":
             info = d.get("info_dict", {})
-            # yt-dlp sets filepath on the info_dict after postprocessing
             fp = info.get("filepath") or info.get("filename", "")
             if fp and os.path.isfile(fp):
                 self._last_filename = fp
                 self._write_log(f"Post-process output: {fp}")
 
-    def _set_progress(self, pct, label):
+    def _set_progress(self, pct, detail):
         self.act_progress_var.set(pct)
-        self._log_update(label, "active")
+        self.prog_detail.config(text=detail)
+        self._log_update(f"Downloading  {detail}", "active")
 
     def _on_download_done(self):
         if self._download_completed:
@@ -768,11 +906,12 @@ class YTDownloaderApp:
         self._download_completed = True
         self.is_downloading = False
         self.act_progress_var.set(100)
+        self.prog_detail.config(text="")
         self._write_log(f"Download complete. Folder: {self.download_path}")
         self._close_dl_log()
         self._log_update("Download complete!", "success")
-        self._log(f"Saved to {self._short_path(self.download_path)}", "muted")
-        self._pill("Done", bg="#e6f9ee", fg=GREEN)
+        self._log(f"Saved to {self._short_path(self.download_path)}", "dim")
+        self._pill("Done")
         self.dl_btn.config(state="normal")
         self.fetch_btn.config(state="normal")
         self._refresh_history()
@@ -782,7 +921,7 @@ class YTDownloaderApp:
         self._write_log(f"Download failed: {error}")
         self._close_dl_log()
         self._log_update(f"Failed: {error[:80]}", "error")
-        self._pill("Error", bg="#fdecea", fg=DL_RED)
+        self._pill("Error")
         self.dl_btn.config(state="normal")
         self.fetch_btn.config(state="normal")
         messagebox.showerror("Download Error", error[:300])
@@ -802,7 +941,7 @@ class YTDownloaderApp:
                 return
         self.root.after(0, self._refresh_history)
 
-    def _load_thumb(self, video_id):
+    def _load_thumb(self, video_id, w=HIST_TW, h=HIST_TH):
         if not PILLOW:
             return None
         path = os.path.join(THUMB_CACHE, f"{video_id}.jpg")
@@ -810,7 +949,7 @@ class YTDownloaderApp:
             return None
         try:
             img   = Image.open(path).convert("RGB")
-            img   = img.resize((THUMB_W, THUMB_H), Image.LANCZOS)
+            img   = img.resize((w, h), Image.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             self._thumb_refs[video_id] = photo
             return photo
@@ -837,72 +976,83 @@ class YTDownloaderApp:
 
     def _render_row(self, entry):
         card = tk.Frame(self.hist_inner, bg=CARD,
-                        highlightbackground=SEP, highlightthickness=1)
-        card.pack(fill="x", pady=(0, 1))
+                        highlightbackground=BORDER, highlightthickness=1)
+        card.pack(fill="x", pady=(0, 8))
 
         inner = tk.Frame(card, bg=CARD)
         inner.pack(fill="x", padx=14, pady=12)
 
-        # Thumbnail box
-        thumb_box = tk.Frame(inner, bg="#e5e5ea",
-                             width=THUMB_W, height=THUMB_H)
+        # Thumbnail
+        file_path   = entry.get("file_path", "")
+        file_exists = bool(file_path and os.path.isfile(file_path))
+
+        thumb_box = tk.Frame(inner, bg="#c8e6d4",
+                             width=HIST_TW, height=HIST_TH)
         thumb_box.pack(side="left")
         thumb_box.pack_propagate(False)
 
         photo = self._load_thumb(entry.get("video_id", ""))
         if photo:
-            tk.Label(thumb_box, image=photo, bg="#e5e5ea").pack(
-                fill="both", expand=True)
+            tk.Label(thumb_box, image=photo, bg="#1c1c1e").pack(fill="both", expand=True)
+            thumb_box.config(bg="#1c1c1e")
         else:
-            tk.Label(thumb_box, text="▶", font=("Helvetica", 20),
-                     bg="#e5e5ea", fg="#c7c7cc").pack(expand=True)
+            tk.Label(thumb_box, text="▶", font=("Helvetica", 14),
+                     bg="#c8e6d4", fg=ACCENT).pack(expand=True)
 
-        # Text block
+        # Text
         text_f = tk.Frame(inner, bg=CARD)
         text_f.pack(side="left", fill="x", expand=True, padx=(12, 0))
 
         title = entry.get("title", "Unknown")
-        tk.Label(text_f, text=title[:64], font=("Helvetica", 13, "bold"),
+        tk.Label(text_f, text=title[:56], font=("Helvetica", 12, "bold"),
                  bg=CARD, fg=FG, anchor="w").pack(fill="x")
 
-        detail_parts = []
-        if entry.get("duration"):
-            detail_parts.append(entry["duration"])
-        if entry.get("format"):
-            detail_parts.append(entry["format"].upper())
-        q = entry.get("quality", "")
-        if q and q != "Best":
-            detail_parts.append(q)
-        if entry.get("uploader"):
-            detail_parts.append(entry["uploader"])
-        if entry.get("downloaded_at"):
-            detail_parts.append(entry["downloaded_at"][:10])
-
-        # File presence check
-        file_path  = entry.get("file_path", "")
-        file_exists = bool(file_path and os.path.isfile(file_path))
+        meta_parts = []
+        dt = entry.get("downloaded_at", "")
+        if dt:
+            meta_parts.append(dt[:10])
+        save_path = entry.get("save_path", "")
+        if save_path:
+            meta_parts.append(self._short_path(save_path))
         if file_path and not file_exists:
-            detail_parts.append("⚠ file removed")
+            meta_parts.append("⚠ file removed")
 
-        detail_lbl = tk.Label(text_f, text="  ·  ".join(detail_parts),
-                              font=FONT_XS, bg=CARD, anchor="w",
-                              fg="#ff3b30" if (file_path and not file_exists) else MUTED)
-        detail_lbl.pack(fill="x", pady=(3, 0))
+        meta_lbl = tk.Label(text_f, text="  ·  ".join(meta_parts),
+                            font=FONT_XS, bg=CARD, anchor="w",
+                            fg="#cc3333" if (file_path and not file_exists) else MUTED)
+        meta_lbl.pack(fill="x", pady=(3, 0))
 
-        # ··· context menu button
-        menu_btn = tk.Button(inner, text="···",
-                             font=("Helvetica", 15, "bold"),
+        # Right side actions
+        right = tk.Frame(inner, bg=CARD)
+        right.pack(side="right", padx=(8, 0))
+
+        fmt = entry.get("format", "").upper()
+        if fmt:
+            tk.Label(right, text=fmt, font=FONT_PILL,
+                     bg=PILL_BG, fg=PILL_FG,
+                     padx=8, pady=2).pack(anchor="e")
+
+        if save_path and os.path.isdir(save_path):
+            tk.Button(right, text="⌁ Finder", font=("Helvetica", 10, "bold"),
+                      bg=CARD, fg=ACCENT, relief="flat", bd=0,
+                      cursor="hand2",
+                      activebackground=CARD, activeforeground="#3d6b4a",
+                      command=lambda p=save_path: os.system(f'open "{p}"')
+                      ).pack(anchor="e", pady=(6, 0))
+
+        menu_btn = tk.Button(right, text="···",
+                             font=("Helvetica", 14, "bold"),
                              bg=CARD, fg=MUTED, relief="flat", bd=0,
                              cursor="hand2",
                              activebackground=CARD, activeforeground=FG)
-        menu_btn.pack(side="right", padx=(8, 0))
-        menu_btn.config(command=lambda e=entry, b=menu_btn: self._show_row_menu(b, e))
+        menu_btn.pack(anchor="e", pady=(4, 0))
+        menu_btn.config(
+            command=lambda e=entry, b=menu_btn: self._show_row_menu(b, e))
 
     # ── Row context menu ───────────────────────────────────────────────────
 
     def _show_row_menu(self, btn, entry):
-        menu = tk.Menu(self.root, tearoff=0,
-                       font=FONT_SM,
+        menu = tk.Menu(self.root, tearoff=0, font=FONT_SM,
                        bg=CARD, fg=FG,
                        activebackground=ACCENT, activeforeground="#fff",
                        relief="flat", bd=0)
@@ -913,7 +1063,6 @@ class YTDownloaderApp:
         url         = entry.get("url", "")
         file_exists = bool(file_path and os.path.isfile(file_path))
 
-        # ── View ───────────────────────────────────────────────────────────
         if save_path and os.path.isdir(save_path):
             menu.add_command(label="View Folder",
                              command=lambda: os.system(f'open "{save_path}"'))
@@ -928,7 +1077,6 @@ class YTDownloaderApp:
 
         menu.add_separator()
 
-        # ── Delete ─────────────────────────────────────────────────────────
         if file_exists:
             menu.add_command(label="Delete File",
                              command=lambda: self._delete_file(entry))
@@ -946,7 +1094,6 @@ class YTDownloaderApp:
 
         menu.add_separator()
 
-        # ── Open ───────────────────────────────────────────────────────────
         if url:
             menu.add_command(label="Open on YouTube",
                              command=lambda: webbrowser.open(url))
@@ -991,15 +1138,13 @@ class YTDownloaderApp:
 
     def _delete_both(self, entry):
         file_path = entry.get("file_path", "")
-        title     = entry.get("title", "this item")
         if not file_path or not os.path.isfile(file_path):
             messagebox.showwarning("File Not Found",
                                    "The file could not be found on disk.")
             return
         if messagebox.askyesno("Delete Both",
                                f'Permanently delete the file and remove from history?\n\n'
-                               f'"{os.path.basename(file_path)}"\n\n'
-                               f'This cannot be undone.'):
+                               f'"{os.path.basename(file_path)}"\n\nThis cannot be undone.'):
             try:
                 os.remove(file_path)
             except Exception as e:
@@ -1021,7 +1166,7 @@ class YTDownloaderApp:
 
 def main():
     root = tk.Tk()
-    YTDownloaderApp(root)
+    CanopyApp(root)
     root.mainloop()
 
 

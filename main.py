@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import threading
+import multiprocessing
 import yt_dlp
 import os
 import sys
@@ -16,8 +17,11 @@ try:
 except ImportError:
     PILLOW = False
 
-ctk.set_appearance_mode("light")
-ctk.set_default_color_theme("green")
+try:
+    import webview
+    WEBVIEW = True
+except ImportError:
+    WEBVIEW = False
 
 HISTORY_FILE = os.path.expanduser("~/.ytdl_history.json")
 THUMB_CACHE  = os.path.expanduser("~/.ytdl_cache/thumbnails")
@@ -44,6 +48,192 @@ FONT_MONO = ("Menlo", 10)
 THUMB_W, THUMB_H = 88, 56
 HIST_TW,  HIST_TH  = 68, 44
 
+# ── Browser JS injected into every page ──────────────────────────────────────
+# Adds a nav bar + floating "Download with Canopy" button on video pages.
+
+BROWSER_JS = r"""
+(function () {
+    'use strict';
+    if (window.__canopy_init) return;
+    window.__canopy_init = true;
+
+    var ACCENT  = '#4a7c59';
+    var TITLEBAR = '#eeeae2';
+    var BORDER  = '#dedad3';
+    var NAV_H   = 46;
+
+    /* ── NAV BAR ── */
+    function buildNav() {
+        var old = document.getElementById('__cpnav');
+        if (old) old.remove();
+
+        var nav = document.createElement('div');
+        nav.id = '__cpnav';
+        nav.style.cssText =
+            'position:fixed;top:0;left:0;right:0;height:' + NAV_H + 'px;' +
+            'background:' + TITLEBAR + ';border-bottom:1px solid ' + BORDER + ';' +
+            'display:flex;align-items:center;gap:6px;padding:0 14px;' +
+            'z-index:2147483647;box-shadow:0 1px 6px rgba(0,0,0,.08);' +
+            'font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
+
+        function mkBtn(label, title, fn) {
+            var b = document.createElement('button');
+            b.textContent = label;
+            b.title = title;
+            b.style.cssText =
+                'background:none;border:none;font-size:18px;cursor:pointer;' +
+                'color:#6b6560;padding:4px 8px;border-radius:6px;line-height:1;' +
+                'flex-shrink:0;';
+            b.onmouseenter = function () { b.style.background = BORDER; };
+            b.onmouseleave = function () { b.style.background = 'none'; };
+            b.onclick = fn;
+            return b;
+        }
+
+        var backBtn   = mkBtn('‹', 'Back',    function () { history.back(); });
+        var fwdBtn    = mkBtn('›', 'Forward', function () { history.forward(); });
+        var reloadBtn = mkBtn('↺', 'Reload',  function () { location.reload(); });
+
+        var urlInput = document.createElement('input');
+        urlInput.id = '__cpurl';
+        urlInput.type = 'text';
+        urlInput.value = location.href;
+        urlInput.spellcheck = false;
+        urlInput.style.cssText =
+            'flex:1;height:28px;border-radius:8px;border:1px solid ' + BORDER + ';' +
+            'padding:0 10px;font-size:12px;background:#fff;color:#2a2520;outline:none;' +
+            'min-width:0;';
+        urlInput.addEventListener('focus', function () { urlInput.select(); });
+        urlInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') goUrl();
+        });
+
+        function goUrl() {
+            var url = urlInput.value.trim();
+            if (!url) return;
+            if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+            location.href = url;
+        }
+
+        var goBtn = mkBtn('→', 'Go', goUrl);
+
+        nav.appendChild(backBtn);
+        nav.appendChild(fwdBtn);
+        nav.appendChild(reloadBtn);
+        nav.appendChild(urlInput);
+        nav.appendChild(goBtn);
+        document.documentElement.insertBefore(nav, document.documentElement.firstChild);
+    }
+
+    /* ── DOWNLOAD BUTTON ── */
+    function updateDlBtn() {
+        var url     = location.href;
+        var isVideo = /[?&]v=/.test(url);
+        var dlBtn   = document.getElementById('__cpdl');
+
+        if (isVideo && !dlBtn) {
+            dlBtn = document.createElement('div');
+            dlBtn.id = '__cpdl';
+            dlBtn.innerHTML = '⬇︎ &nbsp;Download with Canopy';
+            dlBtn.style.cssText =
+                'position:fixed;bottom:28px;right:28px;' +
+                'background:' + ACCENT + ';color:#fff;' +
+                'font-family:-apple-system,BlinkMacSystemFont,sans-serif;' +
+                'font-size:13px;font-weight:600;' +
+                'padding:11px 22px;border-radius:50px;cursor:pointer;' +
+                'z-index:2147483647;user-select:none;' +
+                'box-shadow:0 4px 18px rgba(74,124,89,.45);' +
+                'transition:transform .15s,box-shadow .15s;';
+            dlBtn.onmouseenter = function () {
+                dlBtn.style.transform   = 'scale(1.05)';
+                dlBtn.style.boxShadow   = '0 6px 24px rgba(74,124,89,.6)';
+            };
+            dlBtn.onmouseleave = function () {
+                dlBtn.style.transform   = '';
+                dlBtn.style.boxShadow   = '0 4px 18px rgba(74,124,89,.45)';
+            };
+            dlBtn.onclick = function () {
+                if (window.pywebview && window.pywebview.api) {
+                    window.pywebview.api.download_url(location.href);
+                    dlBtn.innerHTML = '✓ &nbsp;Sent to Canopy';
+                    dlBtn.style.background = '#3b6d45';
+                    setTimeout(function () {
+                        dlBtn.innerHTML = '⬇︎ &nbsp;Download with Canopy';
+                        dlBtn.style.background = ACCENT;
+                    }, 2000);
+                }
+            };
+            document.body.appendChild(dlBtn);
+        } else if (!isVideo && dlBtn) {
+            dlBtn.remove();
+        }
+
+        /* sync url bar */
+        var inp = document.getElementById('__cpurl');
+        if (inp && document.activeElement !== inp) inp.value = location.href;
+    }
+
+    /* ── SPA NAVIGATION INTERCEPTION ── */
+    var _push = history.pushState.bind(history);
+    history.pushState = function () {
+        _push.apply(this, arguments);
+        setTimeout(updateDlBtn, 800);
+    };
+    var _replace = history.replaceState.bind(history);
+    history.replaceState = function () {
+        _replace.apply(this, arguments);
+        setTimeout(updateDlBtn, 800);
+    };
+    window.addEventListener('popstate', function () { setTimeout(updateDlBtn, 400); });
+
+    /* ── INIT ── */
+    buildNav();
+    setTimeout(updateDlBtn, 1200);
+    setTimeout(function () {
+        if (document.body) {
+            var cur = parseInt(document.body.style.paddingTop) || 0;
+            if (cur < NAV_H) document.body.style.paddingTop = NAV_H + 'px';
+        }
+    }, 400);
+})();
+"""
+
+
+# ── Browser process (runs in separate process — macOS WKWebView needs main thread) ──
+
+def _run_browser_process(event_queue, initial_url):
+    """Entry point for the browser subprocess."""
+    try:
+        import webview as wv
+    except ImportError:
+        return
+
+    class BrowserAPI:
+        def download_url(self, url):
+            event_queue.put(url)
+
+    win = wv.create_window(
+        title="Canopy Browser",
+        url=initial_url,
+        js_api=BrowserAPI(),
+        width=1140,
+        height=780,
+        background_color="#f5f3ee",
+        text_select=True,
+        zoomable=True,
+    )
+
+    def on_loaded():
+        try:
+            win.evaluate_js(BROWSER_JS)
+        except Exception:
+            pass
+
+    win.events.loaded += on_loaded
+    wv.start(debug=False)
+
+
+# ── ffmpeg helper ─────────────────────────────────────────────────────────────
 
 def _find_ffmpeg():
     if getattr(sys, "frozen", False):
@@ -99,6 +289,10 @@ class CanopyApp:
         self._last_log_replaceable = False
         self._download_completed   = False
         self._history_rows         = []
+
+        # Browser subprocess state
+        self._browser_proc  = None
+        self._browser_queue = None
 
         self.format_var  = tk.StringVar(value="MP4")
         self.quality_var = tk.StringVar(value="Best")
@@ -186,6 +380,16 @@ class CanopyApp:
         tbar.pack(fill="x")
         tbar.pack_propagate(False)
 
+        # "Browse" button — left side (only shown if pywebview is available)
+        if WEBVIEW:
+            browse_lnk = ctk.CTkLabel(tbar, text="Browse",
+                                       font=("Helvetica", 12, "bold"),
+                                       text_color=ACCENT,
+                                       fg_color="transparent",
+                                       cursor="hand2")
+            browse_lnk.place(relx=0.0, rely=0.5, anchor="w", x=PAD)
+            browse_lnk.bind("<Button-1>", lambda e: self._open_browser())
+
         ctk.CTkLabel(tbar, text="Canopy",
                      font=("Helvetica", 13, "bold"),
                      text_color="#6b6560",
@@ -202,14 +406,13 @@ class CanopyApp:
 
         ctk.CTkFrame(self.root, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
-        # Fixed body (not scrollable — history has its own scroller)
+        # Body
         body = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0)
         body.pack(fill="x")
 
         inner = ctk.CTkFrame(body, fg_color=BG, corner_radius=0)
         inner.pack(fill="x", padx=PAD, pady=(20, 0))
 
-        # Section label
         ctk.CTkLabel(inner, text="VIDEO URL",
                      font=("Helvetica", 9, "bold"),
                      text_color=MUTED,
@@ -380,10 +583,8 @@ class CanopyApp:
                                      command=self._start_download)
         self.dl_btn.pack(fill="x", pady=(0, 20))
 
-        # Divider
         ctk.CTkFrame(self.root, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
-        # History section
         self._build_history_section(PAD)
 
     def _option_card(self, parent, label, var, choices):
@@ -684,6 +885,43 @@ class CanopyApp:
                                    "A download is already running. Please wait.")
             return
         self._show_download_picker()
+
+    # ── Browser integration ───────────────────────────────────────────────────
+
+    def _open_browser(self):
+        """Launch the browser subprocess (or bring it to front if already open)."""
+        if self._browser_proc and self._browser_proc.is_alive():
+            # Already open — nothing to do; OS will handle focus
+            return
+
+        self._browser_queue = multiprocessing.Queue()
+        self._browser_proc  = multiprocessing.Process(
+            target=_run_browser_process,
+            args=(self._browser_queue, "https://www.youtube.com"),
+            daemon=True,
+        )
+        self._browser_proc.start()
+
+        # Poll for download events in a background thread
+        def _poll():
+            while self._browser_proc and self._browser_proc.is_alive():
+                try:
+                    url = self._browser_queue.get(timeout=0.5)
+                    self.root.after(0, lambda u=url: self._browser_trigger_download(u))
+                except Exception:
+                    pass  # queue.Empty on timeout — keep looping
+
+        threading.Thread(target=_poll, daemon=True).start()
+
+    def _browser_trigger_download(self, url):
+        """Called when the user clicks 'Download with Canopy' in the browser."""
+        self.url_entry.delete(0, "end")
+        self.url_entry.insert(0, url)
+        # Bring Canopy to front
+        self.root.lift()
+        self.root.focus_force()
+        # Auto-fetch
+        self._fetch_info()
 
     # ── Download picker dialog ────────────────────────────────────────────────
 
@@ -1284,6 +1522,12 @@ class CanopyApp:
 
 
 def main():
+    # Required for PyInstaller + multiprocessing on macOS
+    multiprocessing.freeze_support()
+
+    ctk.set_appearance_mode("light")
+    ctk.set_default_color_theme("green")
+
     root = ctk.CTk()
     CanopyApp(root)
     root.mainloop()

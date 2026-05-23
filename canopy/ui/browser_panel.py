@@ -16,9 +16,17 @@ url_var    : tk.StringVar
 
 import tkinter as tk
 import customtkinter as ctk
-from canopy.ui.theme import (
-    BG, TITLEBAR, CARD, BORDER, ACCENT, FG, MUTED, DIM, PILL_BG,
+from canopy.ui.tokens import (
+    SP1, SP2,
+    FONT_BODY, FONT_LABEL,
+    BG, CARD, BORDER,
+    ACCENT, ACCENT_HOVER, FG, MUTED,
+    RADIUS_SM, RADIUS_PILL,
+    ERROR, CLOSE_HOVER,
 )
+
+# TITLEBAR still comes from tokens (alias defined there)
+from canopy.ui.tokens import TITLEBAR
 
 
 class BrowserPanel:
@@ -45,58 +53,61 @@ class BrowserPanel:
 
     def _build_nav(self, on_back, on_forward, on_reload, on_close, on_navigate):
         # Outer tk.Frame — height-locked shell (pack_propagate keeps NSView compat)
-        nav_shell = tk.Frame(self.panel, bg=TITLEBAR, height=self._NAV_H)
+        nav_shell = tk.Frame(self.panel, bg=BG, height=self._NAV_H)
         nav_shell.pack(fill="x")
         nav_shell.pack_propagate(False)
 
         # Inner CTkFrame for Canopy-styled content
-        nav = ctk.CTkFrame(nav_shell, fg_color=TITLEBAR, corner_radius=0)
-        nav.pack(fill="both", expand=True, padx=10, pady=9)
+        nav = ctk.CTkFrame(nav_shell, fg_color=BG, corner_radius=0)
+        nav.pack(fill="both", expand=True, padx=SP1, pady=SP1)
 
-        # ── Icon buttons (CTkButton centres text exactly) ─────────────────────
-        def _icon_btn(parent, text, cmd, size=20):
+        # ── Icon buttons ──────────────────────────────────────────────────
+        def _icon_btn(parent, text, cmd, size=18):
             return ctk.CTkButton(
                 parent, text=text, command=cmd,
-                font=("Helvetica Neue", size),
+                font=("SF Pro Text", size),
                 fg_color="transparent",
                 hover_color=BORDER,
-                text_color=FG,
-                corner_radius=8,
+                text_color=MUTED,
+                corner_radius=RADIUS_SM,
                 width=36, height=36,
+                anchor="center",
                 cursor="hand2",
             )
 
         _icon_btn(nav, "‹", on_back,    size=22).pack(side="left")
         _icon_btn(nav, "›", on_forward, size=22).pack(side="left", padx=(2, 0))
-        _icon_btn(nav, "↺", on_reload,  size=16).pack(side="left", padx=(2, 8))
+        _icon_btn(nav, "↺", on_reload,  size=16).pack(side="left", padx=(2, SP1))
 
-        # ── Close — always right, red × ───────────────────────────────────────
+        # ── Close — always right, accent red ─────────────────────────────
         ctk.CTkButton(
             nav, text="✕", command=on_close,
-            font=("Helvetica Neue", 13),
+            font=("SF Pro Text", 13),
             fg_color="transparent",
-            hover_color="#fde8e8",
-            text_color="#c0392b",
-            corner_radius=8,
+            hover_color=CLOSE_HOVER,
+            text_color=ERROR,
+            corner_radius=RADIUS_SM,
             width=36, height=36,
+            anchor="center",
             cursor="hand2",
         ).pack(side="right")
 
-        # ── URL pill ──────────────────────────────────────────────────────────
-        url_pill = ctk.CTkFrame(nav, fg_color=CARD, corner_radius=10,
+        # ── URL pill ──────────────────────────────────────────────────────
+        url_pill = ctk.CTkFrame(nav, fg_color=CARD,
+                                corner_radius=RADIUS_PILL,
                                 border_color=BORDER, border_width=1)
-        url_pill.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        url_pill.pack(side="left", fill="x", expand=True, padx=(0, SP1))
 
         self.url_var = tk.StringVar(value="https://www.youtube.com")
         self.url_entry = tk.Entry(
             url_pill, textvariable=self.url_var,
             bd=0, relief="flat",
             bg=CARD, fg=FG, insertbackground=FG,
-            font=("Helvetica Neue", 13),
+            font=("SF Pro Text", 13),
             highlightthickness=0,
         )
         self.url_entry.pack(side="left", fill="x", expand=True,
-                            padx=(12, 0), ipady=5, pady=6)
+                            padx=(SP2, 0), ipady=5, pady=SP1)
         self.url_entry.bind("<Return>",
                             lambda e: on_navigate(self.url_var.get()))
         self.url_entry.bind("<FocusIn>",  lambda e: None)
@@ -106,12 +117,13 @@ class BrowserPanel:
         # Go button inside the pill
         ctk.CTkButton(
             url_pill, text="↵",
-            font=("Helvetica Neue", 15),
+            font=("SF Pro Text", 15),
             fg_color="transparent",
-            hover_color=PILL_BG,
+            hover_color=BORDER,
             text_color=ACCENT,
-            corner_radius=8,
+            corner_radius=RADIUS_SM,
             width=36, height=28,
+            anchor="center",
             cursor="hand2",
             command=lambda: on_navigate(self.url_var.get()),
         ).pack(side="right", padx=(0, 4), pady=4)

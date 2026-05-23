@@ -11,8 +11,14 @@ import threading
 
 import customtkinter as ctk
 
-from canopy.ui.theme import (
-    BG, CARD, BORDER, ACCENT, FG, MUTED, DIM,
+from canopy.ui.tokens import (
+    SP1, SP2, SP3, SP4,
+    FONT_TITLE, FONT_BODY, FONT_LABEL, FONT_CAPTION,
+    BG, CARD, CARD2, BORDER,
+    ACCENT, ACCENT_HOVER, FG, MUTED, DIM,
+    ERROR,
+    RADIUS_SM, RADIUS_MD, RADIUS_LG, RADIUS_PILL,
+    THUMB_PLACEHOLDER_BG, THUMB_PLACEHOLDER_DARK,
 )
 
 try:
@@ -28,17 +34,7 @@ def show_picker(root: ctk.CTk,
                 opt_show_in_folder,   # tk.BooleanVar
                 opt_open_when_done,   # tk.BooleanVar
                 on_pick) -> None:
-    """Open the modal download-options picker.
-
-    Parameters
-    ----------
-    root                : the CTk root window (used for transient/grab)
-    info                : yt-dlp info dict for the current video
-    thumb_cache         : path to the thumbnail cache directory
-    opt_show_in_folder  : BooleanVar — "Show in Finder when complete"
-    opt_open_when_done  : BooleanVar — "Open file when complete"
-    on_pick             : callable(fmt: str, quality: str) — invoked on selection
-    """
+    """Open the modal download-options picker."""
     title    = info.get("title", "Unknown")
     uploader = info.get("uploader", "")
     duration = info.get("duration_string", "")
@@ -55,13 +51,13 @@ def show_picker(root: ctk.CTk,
     dlg.grab_set()
 
     # ── Thumbnail banner ──────────────────────────────────────────────────────
-    thumb_bg = ctk.CTkFrame(dlg, fg_color="#c8e6d4", corner_radius=0,
+    thumb_bg = ctk.CTkFrame(dlg, fg_color=THUMB_PLACEHOLDER_BG, corner_radius=0,
                              width=DIALOG_W, height=THUMB_DH)
     thumb_bg.pack(fill="x")
     thumb_bg.pack_propagate(False)
 
     thumb_lbl = ctk.CTkLabel(thumb_bg, text="▶",
-                              font=("Helvetica", 40),
+                              font=("SF Pro Display", 40),
                               text_color=ACCENT,
                               fg_color="transparent")
     thumb_lbl.pack(expand=True)
@@ -77,7 +73,7 @@ def show_picker(root: ctk.CTk,
                 def _apply():
                     if dlg.winfo_exists():
                         thumb_lbl.configure(image=ctk_img, text="")
-                        thumb_bg.configure(fg_color="#1c1c1e")
+                        thumb_bg.configure(fg_color=THUMB_PLACEHOLDER_DARK)
                         dlg._photo = ctk_img
                 dlg.after(0, _apply)
             except Exception:
@@ -87,10 +83,10 @@ def show_picker(root: ctk.CTk,
 
     # ── Video info ────────────────────────────────────────────────────────────
     info_f = ctk.CTkFrame(dlg, fg_color=CARD, corner_radius=0)
-    info_f.pack(fill="x", padx=20, pady=(16, 12))
+    info_f.pack(fill="x", padx=SP3, pady=(SP2, SP1))
 
     ctk.CTkLabel(info_f, text=title,
-                 font=("Helvetica", 13, "bold"),
+                 font=FONT_TITLE,
                  text_color=FG,
                  fg_color="transparent",
                  anchor="w", justify="left",
@@ -99,10 +95,10 @@ def show_picker(root: ctk.CTk,
     detail = "  ·  ".join(p for p in (uploader, duration) if p)
     if detail:
         ctk.CTkLabel(info_f, text=detail,
-                     font=("Helvetica", 10),
+                     font=FONT_CAPTION,
                      text_color=MUTED,
                      fg_color="transparent",
-                     anchor="w").pack(fill="x", pady=(5, 0))
+                     anchor="w").pack(fill="x", pady=(SP1, 0))
 
     ctk.CTkFrame(dlg, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
@@ -111,17 +107,17 @@ def show_picker(root: ctk.CTk,
     prefs_f.pack(fill="x")
 
     prefs_inner = ctk.CTkFrame(prefs_f, fg_color="transparent", corner_radius=0)
-    prefs_inner.pack(fill="x", padx=20, pady=(10, 10))
+    prefs_inner.pack(fill="x", padx=SP3, pady=(SP1, SP1))
 
     _cb_kwargs = dict(
-        font=("Helvetica", 11),
+        font=FONT_LABEL,
         text_color=MUTED,
         fg_color=ACCENT,
-        hover_color="#3d6b4a",
+        hover_color=ACCENT_HOVER,
         checkmark_color=CARD,
         border_color=BORDER,
         border_width_checked=0,
-        corner_radius=4,
+        corner_radius=RADIUS_SM,
         checkbox_width=15,
         checkbox_height=15,
     )
@@ -134,7 +130,7 @@ def show_picker(root: ctk.CTk,
     ctk.CTkCheckBox(prefs_inner,
                     text="Open file when complete",
                     variable=opt_open_when_done,
-                    **_cb_kwargs).pack(anchor="w", pady=(7, 0))
+                    **_cb_kwargs).pack(anchor="w", pady=(SP1, 0))
 
     ctk.CTkFrame(dlg, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
@@ -156,31 +152,31 @@ def show_picker(root: ctk.CTk,
         row.pack(fill="x")
 
         pad = ctk.CTkFrame(row, fg_color=CARD, corner_radius=0)
-        pad.pack(fill="x", padx=20, pady=13)
+        pad.pack(fill="x", padx=SP3, pady=SP2)
 
         ctk.CTkLabel(pad, text=icon,
-                     font=("Helvetica", 16),
+                     font=("SF Pro Display", 16),
                      text_color=ACCENT,
                      fg_color="transparent",
                      width=24).pack(side="left")
 
         col = ctk.CTkFrame(pad, fg_color=CARD, corner_radius=0)
-        col.pack(side="left", padx=(12, 0), fill="x", expand=True)
+        col.pack(side="left", padx=(SP2, 0), fill="x", expand=True)
 
         ctk.CTkLabel(col, text=opt_label,
-                     font=("Helvetica", 13, "bold"),
+                     font=(*FONT_BODY[:2], "bold"),
                      text_color=FG,
                      fg_color="transparent",
                      anchor="w").pack(anchor="w")
 
         ctk.CTkLabel(col, text=sub,
-                     font=("Helvetica", 10),
+                     font=FONT_CAPTION,
                      text_color=MUTED,
                      fg_color="transparent",
                      anchor="w").pack(anchor="w", pady=(2, 0))
 
         ctk.CTkLabel(pad, text="›",
-                     font=("Helvetica", 20),
+                     font=("SF Pro Text", 20),
                      text_color=DIM,
                      fg_color="transparent").pack(side="right")
 
@@ -190,9 +186,9 @@ def show_picker(root: ctk.CTk,
 
     # ── Cancel ────────────────────────────────────────────────────────────────
     ctk.CTkButton(dlg, text="Cancel",
-                  font=("Helvetica", 12),
+                  font=FONT_BODY,
                   fg_color=CARD,
-                  hover_color="#f0ede8",
+                  hover_color=CARD2,
                   text_color=MUTED,
                   corner_radius=0,
                   height=48,

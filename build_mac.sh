@@ -19,15 +19,17 @@ $PYI \
   --icon "assets/canopy.icns" \
   --add-binary "$FFMPEG:." \
   --add-data "assets:assets" \
+  --add-data "canopy:canopy" \
+  --add-data "version.py:." \
   --hidden-import yt_dlp \
   --hidden-import PIL \
   --hidden-import PIL.Image \
   --hidden-import PIL.ImageTk \
-  --hidden-import webview \
-  --hidden-import webview.platforms.cocoa \
+  --hidden-import canopy \
+  --hidden-import canopy.ui \
+  --hidden-import canopy.core \
   --collect-all yt_dlp \
   --collect-all customtkinter \
-  --collect-all webview \
   main.py
 
 echo ""

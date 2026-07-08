@@ -7,6 +7,7 @@ run on the main thread (required by Python 3.14 / CustomTkinter).
 """
 
 import os
+import re
 import sys
 import shutil
 import threading
@@ -68,22 +69,53 @@ def _fmt_eta(sec: float) -> str:
 # ── yt-dlp logger adapter ─────────────────────────────────────────────────────
 
 class YtdlLogger:
-    def __init__(self, write_fn):
+    """Routes yt-dlp log messages to the file log and, for key events, to the
+    UI activity feed via an optional *ui_fn* callable(text, kind)."""
+
+    def __init__(self, write_fn, ui_fn=None):
         self._write = write_fn
+        self._ui    = ui_fn   # callable(text, kind) — already UI-thread-safe
 
     def debug(self, msg: str) -> None:
         if msg.startswith("[debug]"):
             return
         self._write(f"[yt-dlp] {msg}")
+        if self._ui:
+            self._surface(msg)
 
     def info(self, msg: str) -> None:
         self._write(f"[yt-dlp] {msg}")
+        if self._ui:
+            self._surface(msg)
 
     def warning(self, msg: str) -> None:
         self._write(f"[yt-dlp WARN] {msg}")
+        if self._ui:
+            # JS runtime warnings are technical noise — users can't act on them
+            if "JavaScript runtime" in msg or "No supported JavaScript" in msg:
+                return
+            self._ui(f"⚠  {msg[:120]}", "warn")
 
     def error(self, msg: str) -> None:
         self._write(f"[yt-dlp ERROR] {msg}")
+
+    # Key yt-dlp messages to surface in the UI feed (everything else is file-only)
+    def _surface(self, msg: str) -> None:
+        m = msg.strip()
+        if "[download] Destination:" in m:
+            fn = os.path.basename(m.split("Destination:", 1)[-1].strip())
+            if re.search(r"\.f\d+\.mp4$", fn):
+                self._ui("Downloading video stream…", "active")
+            elif re.search(r"\.f\d+\.(m4a|webm|opus)$", fn):
+                self._ui("Video stream complete ✓ — downloading audio…", "dim")
+            else:
+                self._ui(f"Downloading: {fn[:60]}", "dim")
+        elif "[Merger]" in m or "Merging formats" in m:
+            self._ui("Merging video + audio tracks…", "active")
+        elif "[ExtractAudio]" in m or "Destination:" in m and ".mp3" in m:
+            self._ui("Extracting audio…", "active")
+        elif "[info]" in m and "format" in m.lower() and len(m) < 100:
+            self._ui(m.replace("[info]", "").strip(), "dim")
 
 
 # ── Downloader ────────────────────────────────────────────────────────────────
@@ -97,13 +129,14 @@ class Downloader:
       on_progress(pct_float, detail_str, pct_str)
       on_download_done(last_filename_or_None)
       on_download_error(error_message_str)
-      on_log_update(text, kind)   — updates the live activity label
+      on_log_update(text, kind)   — replaceable progress line in activity feed
+      on_log_append(text, kind)   — permanent entry appended to activity feed
     """
 
     def __init__(self, *, ui_dispatch, write_log,
                  on_fetch_done, on_progress,
                  on_download_done, on_download_error,
-                 on_log_update):
+                 on_log_update, on_log_append):
         self._ui               = ui_dispatch
         self._write_log        = write_log
         self._on_fetch_done    = on_fetch_done
@@ -111,7 +144,13 @@ class Downloader:
         self._on_download_done = on_download_done
         self._on_download_error = on_download_error
         self._on_log_update    = on_log_update
+        self._on_log_append    = on_log_append
         self._last_filename: str | None = None
+        self._last_phase: str = ""   # "Video" | "Audio" | "" for single-stream
+
+    def _log_status(self, text: str, kind: str = "active") -> None:
+        """Append a permanent log line to the UI from a background thread."""
+        self._ui(lambda t=text, k=kind: self._on_log_append(t, k))
 
     # ── Fetch ──────────────────────────────────────────────────────────────
 
@@ -142,16 +181,27 @@ class Downloader:
 
     # ── Download ───────────────────────────────────────────────────────────
 
-    def download(self, url: str, fmt: str, quality: str,
-                 save_path: str) -> None:
-        """Start a background download."""
-        self._last_filename = None
-        threading.Thread(target=self._do_download,
-                         args=(url, fmt, quality, save_path),
-                         daemon=True).start()
+    def download(self, url: str, fmt: str, quality: str, save_path: str, *,
+                 overwrite: bool = False,
+                 outtmpl_override: str | None = None) -> None:
+        """Start a background download.
 
-    def _do_download(self, url: str, fmt: str, quality: str,
-                     save_path: str) -> None:
+        overwrite       — pass True to overwrite an existing file (replaces it).
+        outtmpl_override — explicit yt-dlp output template; used by Keep Both mode
+                           to write a renamed copy, e.g. ``Title_(2).%(ext)s``.
+        """
+        self._last_filename = None
+        self._last_phase    = ""
+        threading.Thread(
+            target=self._do_download,
+            args=(url, fmt, quality, save_path),
+            kwargs={"overwrite": overwrite, "outtmpl_override": outtmpl_override},
+            daemon=True,
+        ).start()
+
+    def _do_download(self, url: str, fmt: str, quality: str, save_path: str, *,
+                     overwrite: bool = False,
+                     outtmpl_override: str | None = None) -> None:
         self._write_log(f"Download start  url={url}  fmt={fmt}  quality={quality}")
         self._write_log(f"Save path: {save_path}")
         self._write_log(f"ffmpeg: {FFMPEG_PATH or 'NOT FOUND'}")
@@ -160,7 +210,7 @@ class Downloader:
         try:
             ydl_fmt, postprocessors = self._build_format(fmt, quality)
 
-            outtmpl = os.path.join(save_path, "%(title)s.%(ext)s")
+            outtmpl = outtmpl_override or os.path.join(save_path, "%(title)s.%(ext)s")
             self._write_log(f"Format string: {ydl_fmt}")
             self._write_log(f"outtmpl: {outtmpl}")
 
@@ -170,11 +220,13 @@ class Downloader:
                 "merge_output_format":  fmt if fmt not in ("mp3", "m4a") else None,
                 "progress_hooks":       [self._progress_hook],
                 "postprocessor_hooks":  [self._postprocessor_hook],
-                "logger":               YtdlLogger(self._write_log),
+                "logger":               YtdlLogger(self._write_log, self._log_status),
                 "quiet":                False,
                 "no_warnings":          False,
                 "restrictfilenames":    True,   # prevent path traversal via title
             }
+            if overwrite:
+                ydl_opts["overwrites"] = True
             if FFMPEG_PATH:
                 ydl_opts["ffmpeg_location"] = os.path.dirname(FFMPEG_PATH)
             if postprocessors:
@@ -258,33 +310,69 @@ class Downloader:
     # ── Hooks (called from yt-dlp background thread) ───────────────────────
 
     def _progress_hook(self, d: dict) -> None:
-        if d["status"] == "downloading":
+        status = d["status"]
+
+        if status == "downloading":
+            fn         = d.get("filename", "")
             total      = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
             downloaded = d.get("downloaded_bytes", 0)
             speed_bps  = d.get("speed")
             eta_sec    = d.get("eta")
+
+            # Detect dual-stream phase from yt-dlp's fragment filenames
+            # (.f137.mp4 = video stream, .f140.m4a / .f251.webm = audio stream)
+            if re.search(r"\.f\d+\.mp4$", fn):
+                phase = "Video"
+            elif re.search(r"\.f\d+\.(m4a|webm|opus)$", fn):
+                phase = "Audio"
+            else:
+                phase = ""   # single-stream download
+
+            # Emit a permanent log line when the phase changes
+            if phase and phase != self._last_phase:
+                if self._last_phase == "Video" and phase == "Audio":
+                    # Redundant with logger line but guards the edge case where
+                    # the logger message fired before phase tracking was set.
+                    pass
+                self._last_phase = phase
+
             pct = (downloaded / total * 100) if total > 0 else 0
             parts: list[str] = []
             if total > 0:
-                parts.append(f"{_fmt_bytes(downloaded)} of {_fmt_bytes(total)}")
+                parts.append(f"{_fmt_bytes(downloaded)} / {_fmt_bytes(total)}")
             if speed_bps and speed_bps > 0:
                 parts.append(_fmt_speed(speed_bps))
             if eta_sec is not None and eta_sec >= 0:
                 parts.append(f"{_fmt_eta(eta_sec)} left")
-            detail  = "  ·  ".join(parts)
+
+            prefix = f"{phase}  " if phase else ""
+            detail = prefix + "  ·  ".join(parts)
             pct_str = f"{pct:.0f}%"
             self._ui(lambda p=pct, s=detail, ps=pct_str:
                      self._on_progress(p, s, ps))
 
-        elif d["status"] == "finished":
+        elif status == "finished":
+            # "finished" fires after every fragment in a DASH download, not just
+            # the final completion.  Only capture the filename for bookkeeping;
+            # do NOT show "Merging…" here — that is handled by postprocessor_hook.
             fname = d.get("filename", "")
             if fname:
                 self._last_filename = fname
-                self._write_log(f"Fragment finished: {fname}")
-            self._ui(lambda: self._on_progress(95, "Merging tracks…", ""))
+                self._write_log(f"Stream segment done: {os.path.basename(fname)}")
 
     def _postprocessor_hook(self, d: dict) -> None:
-        if d.get("status") == "finished":
+        key    = d.get("postprocessor", "")
+        status = d.get("status", "")
+
+        if status == "started":
+            if key == "Merger":
+                self._log_status("Merging video + audio…  (may take a few minutes for long videos)", "active")
+                self._ui(lambda: self._on_progress(97, "Merging video + audio…", ""))
+            elif key in ("FFmpegExtractAudio", "FFmpegAudioConvertor"):
+                self._log_status("Converting to audio format…", "active")
+                self._ui(lambda: self._on_progress(90, "Converting to audio…", ""))
+
+        elif status == "finished":
             info = d.get("info_dict", {})
             fp   = info.get("filepath") or info.get("filename", "")
             if fp and os.path.isfile(fp):

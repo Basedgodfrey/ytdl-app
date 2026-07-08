@@ -73,6 +73,6 @@ CLOSE_HOVER = "#fde8e8"
 PROG_TRK  = "#ece9e3"
 FONT_MONO = ("Menlo", 10)
 THUMB_W   = 536
-THUMB_H   = 220
+THUMB_H   = 180
 HIST_TW   = 68
 HIST_TH   = 44

@@ -28,6 +28,25 @@ except ImportError:
     _PILLOW = False
 
 
+def _best_transcript(info: dict) -> tuple[str, str]:
+    """Return (lang_code, display_label) for the best available subtitle.
+
+    Returns ('', '') when no captions exist.
+    """
+    subs = info.get("subtitles", {})
+    auto = info.get("automatic_captions", {})
+    for source, kind in [(subs, "manual captions"), (auto, "auto-generated")]:
+        if "en" in source:
+            return "en", f"English · {kind}"
+        for lang in source:
+            if lang.startswith("en"):
+                return lang, f"English · {kind}"
+    for source, kind in [(subs, "manual captions"), (auto, "auto-generated")]:
+        for lang in source:
+            return lang, f"{lang} · {kind}"
+    return "", ""
+
+
 def show_picker(root: ctk.CTk,
                 info: dict,
                 thumb_cache: str,
@@ -48,7 +67,8 @@ def show_picker(root: ctk.CTk,
     dlg.resizable(False, False)
     dlg.configure(fg_color=CARD)
     dlg.transient(root)
-    dlg.grab_set()
+    # grab_set() is called AFTER all widgets are built so a crash during
+    # widget construction never leaves a grab-locked zombie window.
 
     # ── Thumbnail banner ──────────────────────────────────────────────────────
     thumb_bg = ctk.CTkFrame(dlg, fg_color=THUMB_PLACEHOLDER_BG, corner_radius=0,
@@ -116,7 +136,7 @@ def show_picker(root: ctk.CTk,
         hover_color=ACCENT_HOVER,
         checkmark_color=CARD,
         border_color=BORDER,
-        border_width_checked=0,
+        border_width=3,
         corner_radius=RADIUS_SM,
         checkbox_width=15,
         checkbox_height=15,
@@ -184,6 +204,62 @@ def show_picker(root: ctk.CTk,
                      corner_radius=0).pack(fill="x")
         _bind_picker_row(row, _pick)
 
+    # ── Transcript (shown only if captions are available) ─────────────────────
+    lang_code, lang_label = _best_transcript(info)
+    if lang_code:
+        hdr_f = ctk.CTkFrame(dlg, fg_color=BG, corner_radius=0)
+        hdr_f.pack(fill="x")
+        ctk.CTkLabel(hdr_f, text="TRANSCRIPT",
+                     font=FONT_CAPTION,
+                     text_color=MUTED,
+                     fg_color="transparent",
+                     anchor="w").pack(fill="x", padx=SP3, pady=(SP2, SP1))
+        ctk.CTkFrame(dlg, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
+
+        for t_fmt, t_label, t_sub in [
+            ("transcript_txt",  "Transcript — TXT",  "Plain text"),
+            ("transcript_docx", "Transcript — DOCX", "Word document"),
+        ]:
+            def _pick_t(f=t_fmt, lc=lang_code):
+                dlg.destroy()
+                on_pick(f, lc)
+
+            t_row = ctk.CTkFrame(dlg, fg_color=CARD, corner_radius=0, cursor="hand2")
+            t_row.pack(fill="x")
+
+            t_pad = ctk.CTkFrame(t_row, fg_color=CARD, corner_radius=0)
+            t_pad.pack(fill="x", padx=SP3, pady=SP2)
+
+            ctk.CTkLabel(t_pad, text="✦",
+                         font=("SF Pro Display", 14),
+                         text_color=ACCENT,
+                         fg_color="transparent",
+                         width=24).pack(side="left")
+
+            t_col = ctk.CTkFrame(t_pad, fg_color=CARD, corner_radius=0)
+            t_col.pack(side="left", padx=(SP2, 0), fill="x", expand=True)
+
+            ctk.CTkLabel(t_col, text=t_label,
+                         font=(*FONT_BODY[:2], "bold"),
+                         text_color=FG,
+                         fg_color="transparent",
+                         anchor="w").pack(anchor="w")
+
+            ctk.CTkLabel(t_col, text=f"{t_sub}  ·  {lang_label}",
+                         font=FONT_CAPTION,
+                         text_color=MUTED,
+                         fg_color="transparent",
+                         anchor="w").pack(anchor="w", pady=(2, 0))
+
+            ctk.CTkLabel(t_pad, text="›",
+                         font=("SF Pro Text", 20),
+                         text_color=DIM,
+                         fg_color="transparent").pack(side="right")
+
+            ctk.CTkFrame(dlg, fg_color=BORDER, height=1,
+                         corner_radius=0).pack(fill="x")
+            _bind_picker_row(t_row, _pick_t)
+
     # ── Cancel ────────────────────────────────────────────────────────────────
     ctk.CTkButton(dlg, text="Cancel",
                   font=FONT_BODY,
@@ -201,6 +277,10 @@ def show_picker(root: ctk.CTk,
     x  = root.winfo_x() + (root.winfo_width()  - DIALOG_W) // 2
     y  = root.winfo_y() + (root.winfo_height() - dh)        // 2
     dlg.geometry(f"{DIALOG_W}x{dh}+{x}+{y}")
+
+    # Grab only after all widgets are placed — prevents zombie-locked windows
+    # if widget construction ever raised an exception before this point.
+    dlg.grab_set()
 
 
 # ── Row interaction helpers ───────────────────────────────────────────────────

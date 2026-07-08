@@ -1,6 +1,9 @@
 #!/bin/bash
 # build_mac.sh — builds YTDownloader.app for macOS Apple Silicon
 
+# Keep the project folder's "Date Modified" current on every build
+touch "$(dirname "$0")"
+
 PYTHON=/opt/homebrew/bin/python3
 PYI=/opt/homebrew/bin/pyinstaller
 FFMPEG=/opt/homebrew/bin/ffmpeg
@@ -10,6 +13,7 @@ $PYTHON -c "import yt_dlp" 2>/dev/null || { echo "Missing yt-dlp. Run: brew inst
 $PYTHON -c "from PIL import Image" 2>/dev/null || { echo "Missing Pillow. Run: pip install pillow --break-system-packages"; exit 1; }
 $PYTHON -c "import customtkinter" 2>/dev/null || { echo "Missing customtkinter. Run: pip install customtkinter --break-system-packages"; exit 1; }
 $PYTHON -c "import webview" 2>/dev/null || { echo "Missing pywebview. Run: pip install pywebview --break-system-packages"; exit 1; }
+$PYTHON -c "from docx import Document" 2>/dev/null || { echo "Missing python-docx. Run: pip install python-docx --break-system-packages"; exit 1; }
 [ -f "$FFMPEG" ] || { echo "Missing ffmpeg. Run: brew install ffmpeg"; exit 1; }
 
 echo "→ Building Canopy.app..."
@@ -28,6 +32,9 @@ $PYI \
   --hidden-import canopy \
   --hidden-import canopy.ui \
   --hidden-import canopy.core \
+  --hidden-import docx \
+  --collect-all docx \
+  --collect-all lxml \
   --collect-all yt_dlp \
   --collect-all customtkinter \
   main.py

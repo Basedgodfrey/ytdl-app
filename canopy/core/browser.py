@@ -5,6 +5,11 @@ Only constants and the platform-availability flag live here.
 The WKWebView instance lifecycle (embed, animate, poll) is managed by
 CanopyApp in ui/main_window.py because it is tightly coupled to the
 tkinter root and the thread-safe UI queue.
+
+Supported platforms (paste-link and in-browser button):
+  • YouTube  — youtube.com, youtu.be, music.youtube.com
+  • Instagram — Posts (/p/), Reels (/reel/, /reels/), IGTV (/tv/)
+    Note: private-account content requires being logged in via the browser.
 """
 
 # ── Platform availability ────────────────────────────────────────────────────
@@ -21,22 +26,36 @@ try:
 except Exception:
     HAS_WKWEBVIEW = False
 
-# ── Security: only these URL prefixes may trigger a download ─────────────────
+# ── Security: only these URL prefixes may trigger a browser download ──────────
+# Paste-link accepts any yt-dlp-supported URL; this list only guards the
+# in-browser hash-signal path in _wv_poll().
 
 _ALLOWED_PREFIXES = (
+    # YouTube
     "https://www.youtube.com/",
     "https://youtu.be/",
     "https://youtube.com/",
     "https://music.youtube.com/",
+    # Instagram — specific media paths only (not profile / explore pages)
+    "https://www.instagram.com/p/",
+    "https://www.instagram.com/reel/",
+    "https://www.instagram.com/reels/",
+    "https://www.instagram.com/tv/",
+    "https://instagram.com/p/",
+    "https://instagram.com/reel/",
+    "https://instagram.com/reels/",
+    "https://instagram.com/tv/",
 )
 
 # ── Inline JS injected into every WKWebView page ────────────────────────────
 #
-# Adds a floating "Download with Canopy" pill on YouTube video pages.
+# Adds a floating "Download with Canopy" pill on supported video pages:
+#   • YouTube  — watch pages, Shorts
+#   • Instagram — Posts (/p/), Reels (/reel/ /reels/), IGTV (/tv/)
 # Signals Python by setting location.hash = '#__canopy_dl__:<url>'
 # (polled by CanopyApp._wv_poll every 300 ms — no ObjC delegate needed).
 
-WEBVIEW_JS = """
+WEBVIEW_JS = r"""
 (function () {
     'use strict';
     var ACCENT = '#4a7c59';
@@ -49,9 +68,17 @@ WEBVIEW_JS = """
     if (window.__cpwv) { if (typeof window.updateDlBtn === 'function') window.updateDlBtn(); return; }
     window.__cpwv = true;
 
+    function _isDownloadablePage(url) {
+        /* YouTube watch pages and Shorts */
+        if (/[?&]v=/.test(url) || /\/shorts\//.test(url)) return true;
+        /* Instagram Posts, IGTV, Reels — require a media ID (≥5 chars) after the path */
+        if (/instagram\.com\/(?:[^/?#]+\/)?(?:p|tv|reel|reels?)\/([A-Za-z0-9_-]{5,})/.test(url)) return true;
+        return false;
+    }
+
     window.updateDlBtn = function updateDlBtn() {
         var url = location.href;
-        var isVideo = /[?&]v=/.test(url) || /[/]shorts[/]/.test(url);
+        var isVideo = _isDownloadablePage(url);
         var btn = document.getElementById('__cpdl');
         if (isVideo && !btn) {
             btn = document.createElement('div');

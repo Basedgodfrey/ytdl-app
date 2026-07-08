@@ -16,6 +16,9 @@ import queue
 import subprocess
 import os
 import sys
+import glob
+import math
+import time
 import datetime
 import urllib.request
 import webbrowser
@@ -49,6 +52,7 @@ from canopy.ui.tokens import (
 from canopy.ui.browser_panel import BrowserPanel
 from canopy.ui.picker_dialog import show_picker
 import canopy.core.history as history
+import canopy.core.health as health
 from canopy.core.downloader import Downloader, FFMPEG_PATH
 from canopy.core.browser import (
     HAS_WKWEBVIEW, WEBVIEW_JS, _ALLOWED_PREFIXES,
@@ -128,7 +132,7 @@ class CanopyApp:
 
         self.root.title(f"Canopy")
         self.root.geometry("580x860")
-        self.root.minsize(580, 600)
+        self.root.minsize(580, 650)
         self.root.resizable(False, True)
         self.root.configure(fg_color=BG)
 
@@ -148,6 +152,8 @@ class CanopyApp:
         self._download_completed   = False
         self._history_rows: list   = []
         self._last_filename        = None
+        self._pp_start: float | None = None    # monotonic time when post-proc began
+        self._pp_ticker_id         = None       # after() handle for elapsed-time ticker
 
         # ── Browser state ──────────────────────────────────────────────────
         self._wkwebview         = None
@@ -177,6 +183,7 @@ class CanopyApp:
             on_download_done  = self._on_download_done,
             on_download_error = self._on_download_error,
             on_log_update     = self._log_update,
+            on_log_append     = self._log,
         )
 
         # ── Bootstrap ──────────────────────────────────────────────────────
@@ -187,6 +194,10 @@ class CanopyApp:
         _set_dock_icon()
         self._build_ui()
         self._refresh_history()
+
+        # Weekly health check — fires 8 s after launch (UI fully settled by then).
+        self.root.after(8000, self._maybe_run_health_check)
+        self.root.after(100,  self._snap_to_screen_height)
 
     # ── Thread-safe UI dispatch ───────────────────────────────────────────────
 
@@ -203,6 +214,18 @@ class CanopyApp:
         except queue.Empty:
             pass
         self.root.after(16, self._poll_ui_q)
+
+    def _snap_to_screen_height(self) -> None:
+        """Expand to full screen height after the window is fully initialised.
+        Deferring this via after() ensures winfo_screenheight() returns the real
+        display value and that macOS doesn't squeeze the window width."""
+        try:
+            sh = self.root.winfo_screenheight()
+            sw = self.root.winfo_screenwidth()
+            if sh > 700 and sw >= 580:
+                self.root.geometry(f"580x{sh}+0+0")
+        except Exception:
+            pass
 
     # ── Logging ───────────────────────────────────────────────────────────────
 
@@ -354,11 +377,11 @@ class CanopyApp:
         body.pack(fill="x")
 
         inner = ctk.CTkFrame(body, fg_color=BG, corner_radius=0)
-        inner.pack(fill="x", padx=PAD, pady=(SP2, 0))
+        inner.pack(fill="x", padx=PAD, pady=(SP1, 0))
 
         # Video info card
         self.video_card = canopy_card(inner)
-        self.video_card.pack(fill="x", pady=(0, SP1))
+        self.video_card.pack(fill="x", pady=(0, 4))
 
         self.vc_thumb_box = ctk.CTkFrame(self.video_card, fg_color=THUMB_PLACEHOLDER_BG,
                                           corner_radius=0, height=THUMB_H)
@@ -373,10 +396,10 @@ class CanopyApp:
         self._vc_photo = None
 
         vc_info = ctk.CTkFrame(self.video_card, fg_color=CARD, corner_radius=0)
-        vc_info.pack(fill="x", padx=SP2, pady=(SP2, SP2))
+        vc_info.pack(fill="x", padx=SP2, pady=(SP1, SP1))
 
         self.vc_title = ctk.CTkLabel(vc_info,
-                                      text="Paste a YouTube URL to get started",
+                                      text="Paste a YouTube or Instagram link",
                                       font=FONT_TITLE,
                                       text_color=MUTED,
                                       fg_color="transparent",
@@ -412,7 +435,7 @@ class CanopyApp:
 
         # Options row
         opts_row = ctk.CTkFrame(inner, fg_color=BG, corner_radius=0)
-        opts_row.pack(fill="x", pady=(0, SP1))
+        opts_row.pack(fill="x", pady=(0, 4))
 
         self._opt_fmt = self._option_card(opts_row, "FORMAT", self.format_var,
                                           ["MP4", "MP3", "M4A", "WEBM"])
@@ -568,10 +591,10 @@ class CanopyApp:
 
     def _build_progress_card(self, parent) -> None:
         self.prog_card = canopy_card(parent)
-        self.prog_card.pack(fill="x", pady=(0, SP1))
+        self.prog_card.pack(fill="x", pady=(0, 4))
 
         pc = ctk.CTkFrame(self.prog_card, fg_color=CARD, corner_radius=0)
-        pc.pack(fill="x", padx=SP2, pady=(SP2, SP1))
+        pc.pack(fill="x", padx=SP2, pady=(SP1, SP1))
 
         status_row = ctk.CTkFrame(pc, fg_color=CARD, corner_radius=0)
         status_row.pack(fill="x")
@@ -633,7 +656,7 @@ class CanopyApp:
         log_bg.pack(fill="x")
 
         self._log_text = tk.Text(log_bg, bg=LOG_BG, fg=LOG_MUT,
-                                  font=FONT_MONO, height=6,
+                                  font=FONT_MONO, height=7,
                                   relief="flat", bd=0,
                                   state="disabled", wrap="char",
                                   padx=12, pady=10,
@@ -656,7 +679,7 @@ class CanopyApp:
 
     def _build_history_section(self, PAD: int) -> None:
         hist_hdr = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0)
-        hist_hdr.pack(fill="x", padx=PAD, pady=(SP2, SP1))
+        hist_hdr.pack(fill="x", padx=PAD, pady=(SP1, 4))
 
         ctk.CTkLabel(hist_hdr, text="Recent Downloads",
                      font=FONT_TITLE,
@@ -713,6 +736,7 @@ class CanopyApp:
             "Fetching":    ACCENT,
             "Ready":       ACCENT,
             "Downloading": ACCENT,
+            "Merging":     ACCENT,
             "Done":        ACCENT,
             "Error":       ERROR,
         }
@@ -743,7 +767,8 @@ class CanopyApp:
             url = ""
         if not url:
             messagebox.showinfo("Nothing to paste",
-                                "Copy a YouTube URL first, then click Paste Link.")
+                                "Copy a YouTube or Instagram link first, "
+                                "then click Paste Link.")
             return
         self._current_url = url
         self._fetch_info()
@@ -785,8 +810,13 @@ class CanopyApp:
                                  args=(thumb_url, video_id),
                                  daemon=True).start()
         else:
-            self.vc_title.configure(text="Could not fetch video info",
-                                    text_color=ERROR)
+            # title holds the error message string when success=False
+            err_lower = title.lower()
+            if "login" in err_lower or "log in" in err_lower or "private" in err_lower:
+                friendly = "Login required — open the browser, sign in to Instagram, then try again."
+            else:
+                friendly = "Could not fetch video info"
+            self.vc_title.configure(text=friendly, text_color=ERROR)
             self._log(f"Error: {title[:80]}", "error")
             self._pill("Error")
 
@@ -834,6 +864,155 @@ class CanopyApp:
         )
 
     def _begin_download(self, fmt: str, quality: str) -> None:
+        """Called by the picker when the user selects a format/quality."""
+        if not self.info or self.is_downloading:
+            return
+        if fmt.startswith("transcript_"):
+            self._execute_transcript(fmt, quality)
+            return
+        conflict = self._find_download_conflict(fmt)
+        if conflict:
+            self._prompt_duplicate_download(fmt, quality, conflict)
+            return
+        self._execute_download(fmt, quality)
+
+    # ── Duplicate-download handling ───────────────────────────────────────────
+
+    _AUDIO_FMTS = {"mp3", "m4a", "aac", "opus"}
+
+    def _find_download_conflict(self, fmt: str) -> dict | None:
+        """Return the first history entry that a re-download would clobber.
+
+        Only conflicts within the same media category (audio vs video) and only
+        when the previously-saved file still exists on disk.
+        """
+        new_is_audio = fmt.lower() in self._AUDIO_FMTS
+        for entry in self.history:
+            if entry.get("url") != self._current_url:
+                continue
+            fp = entry.get("file_path", "")
+            if not fp or not os.path.isfile(fp):
+                continue
+            existing_is_audio = entry.get("format", "").lower() in self._AUDIO_FMTS
+            if new_is_audio != existing_is_audio:
+                continue   # different category (e.g. MP3 vs MP4) — no conflict
+            return entry
+        return None
+
+    def _prompt_duplicate_download(self, fmt: str, quality: str,
+                                    conflict: dict) -> None:
+        """Show a styled modal asking Replace / Keep Both / Cancel."""
+        dlg = ctk.CTkToplevel(self.root)
+        dlg.title("")
+        dlg.resizable(False, False)
+        dlg.configure(fg_color=CARD)
+        dlg.transient(self.root)
+
+        W = 360
+        pad = ctk.CTkFrame(dlg, fg_color=CARD, corner_radius=0)
+        pad.pack(fill="x", padx=SP4, pady=(SP4, SP3))
+
+        ctk.CTkLabel(pad, text="Already Downloaded",
+                     font=FONT_TITLE, text_color=FG,
+                     fg_color="transparent").pack(anchor="w")
+
+        title_text = conflict.get("title", "This video")
+        date_str   = conflict.get("downloaded_at", "")[:10]
+        fp         = conflict.get("file_path", "")
+        size_label = ""
+        if fp and os.path.isfile(fp):
+            size = os.path.getsize(fp)
+            size_label = (f"{size/1_048_576:.1f} MB"
+                          if size >= 1_048_576 else f"{size/1024:.0f} KB")
+
+        detail_parts = [p for p in (date_str, size_label) if p]
+        detail = (f'"{title_text[:52]}"\n'
+                  + "  ·  ".join(detail_parts))
+
+        ctk.CTkLabel(pad, text=detail,
+                     font=FONT_LABEL, text_color=MUTED,
+                     fg_color="transparent",
+                     justify="left", anchor="w",
+                     wraplength=W - SP4 * 2).pack(anchor="w", pady=(SP1, 0))
+
+        ctk.CTkFrame(pad, fg_color=BORDER, height=1,
+                     corner_radius=0).pack(fill="x", pady=(SP2, 0))
+
+        ctk.CTkLabel(pad, text="What would you like to do?",
+                     font=FONT_BODY, text_color=FG,
+                     fg_color="transparent").pack(anchor="w", pady=(SP2, 0))
+
+        result = {"choice": None}
+
+        def _choose(c):
+            result["choice"] = c
+            dlg.destroy()
+
+        btns = ctk.CTkFrame(pad, fg_color=CARD, corner_radius=0)
+        btns.pack(fill="x", pady=(SP2, 0))
+
+        ctk.CTkButton(btns, text="Keep Both  —  save as a new copy",
+                      font=(*FONT_BODY[:2], "bold"),
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      text_color=CARD, corner_radius=RADIUS_MD, height=40,
+                      command=lambda: _choose("keep_both"),
+                      ).pack(fill="x")
+
+        ctk.CTkButton(btns, text="Replace  —  overwrite the existing file",
+                      font=FONT_BODY,
+                      fg_color=CARD, hover_color=CARD2,
+                      text_color=FG, corner_radius=RADIUS_MD, height=40,
+                      border_width=1, border_color=BORDER,
+                      command=lambda: _choose("replace"),
+                      ).pack(fill="x", pady=(SP1, 0))
+
+        ctk.CTkButton(btns, text="Cancel",
+                      font=FONT_BODY,
+                      fg_color=CARD, hover_color=CARD2,
+                      text_color=MUTED, corner_radius=RADIUS_MD, height=38,
+                      border_width=0,
+                      command=lambda: _choose("cancel"),
+                      ).pack(fill="x", pady=(SP1, 0))
+
+        dlg.update_idletasks()
+        dh = dlg.winfo_reqheight()
+        x  = self.root.winfo_x() + (self.root.winfo_width()  - W) // 2
+        y  = self.root.winfo_y() + (self.root.winfo_height() - dh) // 2
+        dlg.geometry(f"{W}x{dh}+{x}+{y}")
+        dlg.grab_set()
+
+        # Block here (nested event loop) until user picks an option.
+        self.root.wait_window(dlg)
+
+        if result["choice"] == "keep_both":
+            self._execute_download(fmt, quality,
+                                    outtmpl_override=self._make_rename_outtmpl(fmt))
+        elif result["choice"] == "replace":
+            self._execute_download(fmt, quality, overwrite=True)
+        # "cancel" / None → do nothing
+
+    def _make_rename_outtmpl(self, fmt: str) -> str:
+        """Return a unique outtmpl string for a 'Keep Both' download.
+
+        Produces  <download_path>/<safe_title>_(N).%(ext)s  where N is the
+        smallest integer ≥ 2 whose glob doesn't match any existing file.
+        """
+        try:
+            from yt_dlp.utils import sanitize_filename
+            title = self.info.get("title", "video") if self.info else "video"
+            safe  = sanitize_filename(title, restricted=True)
+        except Exception:
+            safe  = "video"
+
+        n = 2
+        while glob.glob(os.path.join(self.download_path, f"{safe}_({n}).*")):
+            n += 1
+        return os.path.join(self.download_path, f"{safe}_({n}).%(ext)s")
+
+    def _execute_download(self, fmt: str, quality: str, *,
+                           overwrite: bool = False,
+                           outtmpl_override: str | None = None) -> None:
+        """Arm the UI and hand off to Downloader."""
         if not self.info or self.is_downloading:
             return
         url      = self._current_url
@@ -852,17 +1031,54 @@ class CanopyApp:
         self.act_bar.set(0)
         self.prog_detail.configure(text="")
         self.prog_pct.configure(text="")
-        self._log(f"Starting {fmt.upper()} {quality} download...", "green")
+        mode = (" — replacing" if overwrite
+                else " — new copy" if outtmpl_override else "")
+        self._log(f"Starting {fmt.upper()} {quality} download{mode}...", "green")
         self._pill("Downloading")
-        self._downloader.download(url, fmt, quality, self.download_path)
+        self._downloader.download(url, fmt, quality, self.download_path,
+                                   overwrite=overwrite,
+                                   outtmpl_override=outtmpl_override)
 
     def _set_progress(self, pct: float, detail: str,
                        pct_str: str | None = None) -> None:
-        self.act_bar.set(pct / 100)
+        is_pp = any(k in detail for k in ("Merging", "Converting", "Extracting"))
+        if is_pp:
+            # Post-processing phase: switch pill, clear pct label, start elapsed ticker
+            self._pill("Merging")
+            self.prog_pct.configure(text="")
+            if self._pp_start is None:
+                self._pp_start = time.monotonic()
+                label = detail.rstrip("…").rstrip() + "…"
+                self._tick_pp(label)
+        else:
+            self.act_bar.set(pct / 100)
+            self.prog_detail.configure(text=detail)
+            if pct_str is not None:
+                self.prog_pct.configure(text=pct_str)
+            self._log_update(detail, "active")
+
+    def _tick_pp(self, label: str) -> None:
+        """Called every 500 ms during post-processing to update elapsed time
+        and gently animate the progress bar so the UI never looks frozen."""
+        if self._pp_start is None:
+            return
+        elapsed = time.monotonic() - self._pp_start
+        elapsed_i = int(elapsed)
+        m, s    = divmod(elapsed_i, 60)
+        # Smooth oscillation between 88 % and 98 % so the bar looks active
+        anim = 0.93 + 0.05 * math.sin(elapsed * 0.8)
+        self.act_bar.set(anim)
+        detail = f"{label}  {m}m {s:02d}s"
         self.prog_detail.configure(text=detail)
-        if pct_str is not None:
-            self.prog_pct.configure(text=pct_str)
-        self._log_update(f"Downloading  {detail}", "active")
+        self._log_update(detail, "active")
+        self._pp_ticker_id = self.root.after(500, lambda: self._tick_pp(label))
+
+    def _stop_pp_ticker(self) -> None:
+        """Cancel the post-processing elapsed ticker and reset state."""
+        if self._pp_ticker_id is not None:
+            self.root.after_cancel(self._pp_ticker_id)
+            self._pp_ticker_id = None
+        self._pp_start = None
 
     def _on_download_done(self, last_filename: str | None) -> None:
         """Called on the main thread by Downloader when a download completes."""
@@ -871,6 +1087,7 @@ class CanopyApp:
         self._download_completed = True
         self._last_filename = last_filename
         self.is_downloading = False
+        self._stop_pp_ticker()
         self.act_bar.set(1.0)
         self.prog_detail.configure(text="")
         self.prog_pct.configure(text="")
@@ -929,6 +1146,7 @@ class CanopyApp:
 
     def _on_download_error(self, error: str) -> None:
         self.is_downloading = False
+        self._stop_pp_ticker()
         self._write_log(f"Download failed: {error}")
         self._close_dl_log()
         self._log_update(f"Failed: {error[:80]}", "error")
@@ -937,6 +1155,69 @@ class CanopyApp:
         self.paste_btn.configure(state="normal")
         self._show_dl_footer()
         messagebox.showerror("Download Error", error[:300])
+
+    # ── Transcript download ───────────────────────────────────────────────────
+
+    def _execute_transcript(self, fmt: str, lang: str) -> None:
+        """Fetch a YouTube transcript and save it as .txt or .docx."""
+        from canopy.core import transcriber
+        ext = fmt.split("_", 1)[1]  # "txt" or "docx"
+        info     = self.info
+        title    = info.get("title", "Transcript")
+        uploader = info.get("uploader", "")
+        duration = info.get("duration_string", "")
+        url      = self._current_url
+        save_dir = self.download_path
+
+        self.is_downloading = True
+        self._hide_dl_footer()
+        self.dl_btn.configure(state="disabled")
+        self.paste_btn.configure(state="disabled")
+        self.act_bar.set(0.3)
+        self.prog_detail.configure(text="")
+        self.prog_pct.configure(text="")
+        self._log("Fetching transcript…", "green")
+        self._pill("Fetching")
+
+        def _worker():
+            try:
+                vtt  = transcriber.fetch_vtt(info, lang)
+                text = transcriber.vtt_to_text(vtt)
+                if ext == "docx":
+                    path = transcriber.save_docx(
+                        text, title, uploader, duration, url, save_dir)
+                else:
+                    path = transcriber.save_txt(text, title, save_dir)
+                self._ui(lambda p=path: self._on_transcript_done(p))
+            except Exception as e:
+                self._ui(lambda m=str(e): self._on_download_error(m))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_transcript_done(self, path: str) -> None:
+        self.is_downloading = False
+        self.act_bar.set(1.0)
+        self.prog_detail.configure(text="")
+        self.prog_pct.configure(text="")
+        self._log_update("Transcript saved!", "success")
+        self._log(f"Saved to {self._short_path(self.download_path)}", "dim")
+        self._pill("Done")
+        self.dl_btn.configure(state="normal")
+        self.paste_btn.configure(state="normal")
+        self._show_dl_footer()
+
+        if self._opt_open_when_done.get() and os.path.isfile(path):
+            try:
+                subprocess.Popen(["open", path])
+            except Exception:
+                pass
+        if self._opt_show_in_folder.get():
+            try:
+                cmd = (["open", "-R", path] if os.path.isfile(path)
+                       else ["open", self.download_path])
+                subprocess.Popen(cmd)
+            except Exception:
+                pass
 
     # ── Thumbnails ────────────────────────────────────────────────────────────
 
@@ -1445,6 +1726,52 @@ class CanopyApp:
         self._close_browser()
         self._current_url = url
         self._fetch_info()
+
+    # ── Weekly health check ───────────────────────────────────────────────────
+
+    def _maybe_run_health_check(self) -> None:
+        """Trigger a background health check if 7+ days have passed."""
+        if not health.is_due():
+            prev = health.last_result()
+            if prev:
+                checked = prev.get("checked_at", "")[:10]
+                ver     = prev.get("yt_dlp_version", "")
+                self._write_log(
+                    f"Health check skipped — last ran {checked}  yt-dlp {ver}")
+            return
+        self._write_log("Starting weekly YouTube health check…")
+        self._log("Running weekly health check…", "dim")
+        health.run(self._on_health_result)
+
+    def _on_health_result(self, results: dict) -> None:
+        """Receive check results from the background thread → hand off to main thread."""
+        self._ui(lambda r=results: self._show_health_result(r))
+
+    def _show_health_result(self, results: dict) -> None:
+        """Display health check outcome in the activity log."""
+        tests   = results.get("tests", {})
+        all_ok  = all(t.get("ok") for t in tests.values())
+        ver     = results.get("yt_dlp_version", "")
+        date    = results.get("checked_at", "")[:10]
+
+        if all_ok:
+            fmts = {k: t.get("formats", "?") for k, t in tests.items()}
+            detail = "  ·  ".join(
+                f"{k} {v} formats" for k, v in fmts.items())
+            self._write_log(
+                f"Health check passed ✓  {date}  yt-dlp {ver}  ({detail})")
+            self._log(
+                f"Weekly check ✓  Video + Shorts OK  (yt-dlp {ver})", "dim")
+        else:
+            failed  = [k for k, t in tests.items() if not t.get("ok")]
+            errors  = {k: tests[k].get("error", "unknown")
+                       for k in failed}
+            self._write_log(
+                f"Health check WARNING  {date}  yt-dlp {ver}  "
+                f"failures={failed}  errors={errors}")
+            self._log(
+                f"Weekly check ✗  Issues with: {', '.join(failed)}  "
+                f"— check the debug log for details", "warn")
 
     # ── About panel ───────────────────────────────────────────────────────────
 

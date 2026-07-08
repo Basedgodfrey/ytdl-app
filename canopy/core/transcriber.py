@@ -65,10 +65,24 @@ def fetch_vtt(info: dict, lang: str) -> str:
 def vtt_to_text(vtt: str) -> str:
     """Parse VTT subtitle content into clean, readable plain text.
 
-    Strips the WEBVTT header, all timestamp lines, inline HTML tags,
-    and consecutive duplicate lines (which auto-captions produce due to
-    overlapping cue windows).
+    YouTube auto-generated captions use a rolling 2-line window: each cue
+    carries forward the tail of the previous cue as context, producing a
+    pattern like:
+
+        "...My name"                          ← partial A
+        "...My name is Marshall Cruz..."      ← A + B (longer)
+        "is Marshall Cruz..."                 ← partial B
+        "is Marshall Cruz...of DMs..."        ← B + C (longer)
+
+    We fix this with three passes:
+      1. Drop any block that is a strict prefix of the next block (it's just
+         an incomplete version that gets completed in the following cue).
+      2. Strip the prefix overlap each block shares with the previous kept
+         block, leaving only genuinely new content.
+      3. Join fragments into sentence-boundary paragraphs so the output reads
+         naturally rather than breaking mid-phrase.
     """
+    # ── Pass 0: parse raw cue text blocks ────────────────────────────────────
     blocks: list[str] = []
     current: list[str] = []
     past_header = False
@@ -81,25 +95,21 @@ def vtt_to_text(vtt: str) -> str:
                 past_header = True
             continue
 
-        # Timestamp line → flush current cue
         if re.match(r"[\d:]+\.?\d*\s+-->", line):
             if current:
                 blocks.append(" ".join(current))
                 current = []
             continue
 
-        # Blank line → flush current cue
         if not line:
             if current:
                 blocks.append(" ".join(current))
                 current = []
             continue
 
-        # Numeric cue ID
         if re.match(r"^\d+$", line):
             continue
 
-        # Strip VTT timing tags (<00:00:01.234>) and other HTML
         clean = re.sub(r"<[^>]+>", "", line)
         for old, new in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " ")):
             clean = clean.replace(old, new)
@@ -110,13 +120,48 @@ def vtt_to_text(vtt: str) -> str:
     if current:
         blocks.append(" ".join(current))
 
-    # Remove back-to-back duplicate blocks produced by overlapping auto-captions
-    deduped: list[str] = []
-    for b in blocks:
-        if not deduped or deduped[-1] != b:
-            deduped.append(b)
+    # ── Pass 1: drop blocks that are strict prefixes of the next block ───────
+    filtered: list[str] = []
+    for i, block in enumerate(blocks):
+        nxt = blocks[i + 1] if i + 1 < len(blocks) else ""
+        if nxt.startswith(block) and nxt != block:
+            continue
+        filtered.append(block)
 
-    return "\n".join(deduped)
+    # ── Pass 2: strip prefix overlap shared with the previous kept block ─────
+    fragments: list[str] = []
+    for i, block in enumerate(filtered):
+        if i == 0:
+            fragments.append(block)
+            continue
+        prev = fragments[-1]
+        new_part = block
+        # Find the longest suffix of prev that is also a prefix of block;
+        # only strip if the overlap is >= 5 chars (avoids false positives).
+        for length in range(min(len(prev), len(block)), 4, -1):
+            if prev.endswith(block[:length]):
+                candidate = block[length:].lstrip()
+                if candidate:
+                    new_part = candidate
+                break
+        if new_part and new_part != prev:
+            fragments.append(new_part)
+
+    # ── Pass 3: join fragments into sentence-boundary paragraphs ─────────────
+    _SENT_END = re.compile(r"[.?!]\s*$")
+    paras: list[str] = []
+    run: list[str] = []
+
+    for frag in fragments:
+        run.append(frag)
+        if _SENT_END.search(frag):
+            paras.append(" ".join(run))
+            run = []
+
+    if run:
+        paras.append(" ".join(run))
+
+    return "\n".join(paras)
 
 
 def _safe_filename(title: str) -> str:

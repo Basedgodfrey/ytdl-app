@@ -47,6 +47,15 @@ def _best_transcript(info: dict) -> tuple[str, str]:
     return "", ""
 
 
+def _available_video_heights(info: dict) -> set[int]:
+    """Return the set of video heights present in yt-dlp's format list."""
+    return {
+        f["height"]
+        for f in info.get("formats", [])
+        if f.get("height") and f.get("vcodec", "none") != "none"
+    }
+
+
 def show_picker(root: ctk.CTk,
                 info: dict,
                 thumb_cache: str,
@@ -154,14 +163,18 @@ def show_picker(root: ctk.CTk,
 
     ctk.CTkFrame(dlg, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
-    # ── Format / quality rows ─────────────────────────────────────────────────
-    options = [
-        ("4K Ultra HD",  "mp4", "4K",    "▶", "2160p  ·  VP9 / HEVC  ·  MP4"),
-        ("1080p HD",     "mp4", "1080p", "▶", "Best quality  ·  H.264  ·  MP4"),
-        ("720p",         "mp4", "720p",  "▶", "High definition  ·  H.264  ·  MP4"),
-        ("480p",         "mp4", "480p",  "▶", "Standard  ·  H.264  ·  MP4"),
-        ("Audio — MP3",  "mp3", "Best",  "♪", "Audio only  ·  192 kbps  ·  MP3"),
-    ]
+    # ── Format / quality rows (only show heights the video actually has) ────────
+    _heights = _available_video_heights(info)
+    options = []
+    if any(h >= 2160 for h in _heights):
+        options.append(("4K Ultra HD", "mp4", "4K",    "▶", "2160p  ·  VP9 / HEVC  ·  MP4"))
+    if any(h >= 1080 for h in _heights):
+        options.append(("1080p HD",    "mp4", "1080p", "▶", "Best quality  ·  H.264  ·  MP4"))
+    if any(h >= 720 for h in _heights):
+        options.append(("720p",        "mp4", "720p",  "▶", "High definition  ·  H.264  ·  MP4"))
+    if any(h >= 480 for h in _heights):
+        options.append(("480p",        "mp4", "480p",  "▶", "Standard  ·  H.264  ·  MP4"))
+    options.append(("Audio — MP3",     "mp3", "Best",  "♪", "Audio only  ·  192 kbps  ·  MP3"))
 
     for opt_label, fmt, quality, icon, sub in options:
         def _pick(f=fmt, q=quality):

@@ -14,6 +14,21 @@ import threading
 import yt_dlp
 
 
+# ── JavaScript runtime discovery (for yt-dlp nsig decoding) ─────────────────
+
+def _find_node() -> str | None:
+    for path in (
+        "/opt/homebrew/bin/node",   # Homebrew Apple Silicon
+        "/usr/local/bin/node",      # Homebrew Intel
+        "/usr/bin/node",            # system
+    ):
+        if os.path.isfile(path):
+            return path
+    return shutil.which("node")
+
+_NODE_PATH = _find_node()
+_JS_RUNTIMES: dict = ({"node": {"path": _NODE_PATH}} if _NODE_PATH else {})
+
 # ── ffmpeg discovery ──────────────────────────────────────────────────────────
 
 def _find_ffmpeg() -> str | None:
@@ -162,7 +177,8 @@ class Downloader:
         self._write_log(f"Fetching info for: {url}")
         try:
             with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True,
-                                    "skip_download": True}) as ydl:
+                                    "skip_download": True,
+                                    **(_JS_RUNTIMES and {"js_runtimes": _JS_RUNTIMES})}) as ydl:
                 info = ydl.extract_info(url, download=False)
             title     = info.get("title", "Unknown")
             uploader  = info.get("uploader", "")
@@ -225,6 +241,8 @@ class Downloader:
                 "no_warnings":          False,
                 "restrictfilenames":    True,   # prevent path traversal via title
             }
+            if _JS_RUNTIMES:
+                ydl_opts["js_runtimes"] = _JS_RUNTIMES
             if overwrite:
                 ydl_opts["overwrites"] = True
             if FFMPEG_PATH:

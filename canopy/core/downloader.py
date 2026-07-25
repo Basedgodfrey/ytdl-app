@@ -177,7 +177,7 @@ class Downloader:
         self._write_log(f"Fetching info for: {url}")
         try:
             with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True,
-                                    "skip_download": True,
+                                    "skip_download": True, "noplaylist": True,
                                     **(_JS_RUNTIMES and {"js_runtimes": _JS_RUNTIMES})}) as ydl:
                 info = ydl.extract_info(url, download=False)
             title     = info.get("title", "Unknown")
@@ -240,6 +240,7 @@ class Downloader:
                 "quiet":                False,
                 "no_warnings":          False,
                 "restrictfilenames":    True,   # prevent path traversal via title
+                "noplaylist":           True,   # never expand playlist URLs
             }
             if _JS_RUNTIMES:
                 ydl_opts["js_runtimes"] = _JS_RUNTIMES

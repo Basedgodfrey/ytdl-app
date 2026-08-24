@@ -178,6 +178,7 @@ class Downloader:
         try:
             with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True,
                                     "skip_download": True, "noplaylist": True,
+                                    "extractor_args": {"youtube": {"player_client": ["mweb"]}},
                                     **(_JS_RUNTIMES and {"js_runtimes": _JS_RUNTIMES})}) as ydl:
                 info = ydl.extract_info(url, download=False)
             title     = info.get("title", "Unknown")
@@ -241,6 +242,8 @@ class Downloader:
                 "no_warnings":          False,
                 "restrictfilenames":    True,   # prevent path traversal via title
                 "noplaylist":           True,   # never expand playlist URLs
+                # mweb client bypasses YouTube's DASH 403 without needing PO tokens
+                "extractor_args":       {"youtube": {"player_client": ["mweb"]}},
             }
             if _JS_RUNTIMES:
                 ydl_opts["js_runtimes"] = _JS_RUNTIMES
